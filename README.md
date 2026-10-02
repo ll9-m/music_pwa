@@ -5,6 +5,8 @@
 ## 启动
 直接浏览器访问：https://ll9-m.github.io/music_pwa/
 
+或者用如下方法：
+
 ```bash
 node server.js        # 默认 http://localhost:8080
 # 或指定端口：node server.js 9000
