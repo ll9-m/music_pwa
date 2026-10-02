@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="纯离线的本地音乐播放器 PWA：扫描本地音乐文件夹，无需任何网络。">
+  <title>本地音乐</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="theme-color" content="#f4f5f8">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="scanProgress"><div class="bar"></div></div>
+
+  <div id="app">
+    <header id="appHeader">
+      <h1></h1>
+    </header>
+    <nav class="tabbar" id="tabbar"></nav>
+    <main id="view"></main>
+  </div>
+
+  <div id="miniPlayer" class="hidden" role="region" aria-label="迷你播放条"></div>
+
+  <div id="np" aria-label="正在播放"></div>
+
+  <div id="toasts"></div>
+
+  <noscript>本应用需要启用 JavaScript。</noscript>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

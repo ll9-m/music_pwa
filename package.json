@@ -1,0 +1,11 @@
+{
+  "name": "local-music-pwa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "纯本地离线的音乐播放器 PWA（无需联网）",
+  "scripts": {
+    "start": "node server.js",
+    "icons": "node scripts/gen-icons.js",
+    "test": "node scripts/test-metadata.js"
+  }
+}
