@@ -6,6 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "icons": "node scripts/gen-icons.js",
-    "test": "node scripts/test-metadata.js"
-  }
+    "test": "node scripts/test-bili.mjs && node scripts/test-bili-proxy.mjs",
+    "test:bili": "node scripts/test-bili.mjs",
+    "test:proxy": "node scripts/test-bili-proxy.mjs",
+    "test:ui": "node scripts/test-anime-ui.mjs",
+    "test:lyrics": "node scripts/test-lyrics.mjs"
+  },
+  "comment": "test:ui 需要 jsdom，但本项目坚持零运行时依赖，所以它借用工作区里已有的 jsdom（NODE_PATH），不写进 dependencies。UI 测试不参与默认 test，因为它需要 NODE_PATH 才能跑；解析器与代理测试是零依赖的。"
 }

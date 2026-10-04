@@ -67,6 +67,9 @@ const P = {
   moon: '<path d="M20 13.5A8.5 8.5 0 0 1 10.5 4 8.5 8.5 0 1 0 20 13.5z"/>',
   info: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16.5"/><circle cx="12" cy="7.8" r="1.1" fill="currentColor" stroke="none"/>',
   playNext: '<path d="M4 5l8 5-8 5z" fill="currentColor" stroke="none"/><line x1="16" y1="5" x2="16" y2="15"/><line x1="4" y1="19.5" x2="20" y2="19.5"/>',
+  // 番剧库用：外链（跳官方）与片库（番剧入口）
+  external: '<path d="M14 4h6v6"/><line x1="20" y1="4" x2="11" y2="13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  screen: '<rect x="2.5" y="4" width="19" height="13" rx="2"/><line x1="8" y1="20.5" x2="16" y2="20.5"/><line x1="12" y1="17" x2="12" y2="20.5"/>',
 };
 
 export function icon(name, cls) {

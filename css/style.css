@@ -438,6 +438,74 @@ html[data-theme="glass"] .np-sheet {
 .plcard .name { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plcard .sub { font-size: 12px; color: var(--text3); }
 
+/* ---------------- 番剧库 ---------------- */
+.anime-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 12px; }
+.anime-card {
+  display: flex; align-items: center; gap: 12px; padding: 11px 13px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 13px;
+  cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s;
+}
+.anime-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); border-color: var(--accent); }
+.anime-card .ac-cover {
+  width: 56px; height: 40px; flex: none; border-radius: 8px; object-fit: cover;
+  background: var(--panel); display: grid; place-items: center; color: #fff;
+}
+.anime-card .ac-cover svg { width: 19px; height: 19px; }
+.anime-card .ac-body { flex: 1; min-width: 0; }
+.anime-card .ac-title {
+  font-weight: 600; font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.anime-card .ac-sub { font-size: 12px; color: var(--text3); }
+
+/* 详情：播放器用 16:9。用 aspect-ratio 而非固定像素，
+   这样窄屏下它会自己变矮，不必写三档媒体查询。 */
+.anime-detail { display: grid; gap: 14px; }
+.ap-frame {
+  position: relative; width: 100%; aspect-ratio: 16 / 9;
+  background: #000; border-radius: 13px; overflow: hidden; border: 1px solid var(--border);
+}
+.ap-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.ap-note {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 12.5px; color: var(--text3); line-height: 1.5;
+}
+.ap-note svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+
+.ap-none { padding: 30px 24px; text-align: center; }
+.ap-none b { font-size: 15.5px; display: block; margin-bottom: 6px; }
+.ap-none p { margin: 0 0 14px; font-size: 13.5px; color: var(--text2); line-height: 1.6; }
+.ap-none code {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12.5px; background: var(--row-hover); padding: 1px 5px; border-radius: 4px;
+}
+.ap-none-acts { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+.ap-eps { display: flex; flex-wrap: wrap; gap: 6px; }
+.ap-ep {
+  font: inherit; font-size: 12.5px; padding: 5px 11px; cursor: pointer;
+  background: var(--card); color: var(--text2);
+  border: 1px solid var(--border); border-radius: 8px;
+  transition: background .13s, color .13s, border-color .13s;
+}
+.ap-ep:hover { background: var(--row-hover); color: var(--text); }
+.ap-ep.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+/* 添加/编辑弹窗 */
+.anime-dlg { max-width: 460px; }
+.af-body b { margin-bottom: 12px; }
+.af-fld { display: block; margin-bottom: 10px; }
+.af-fld span { display: block; font-size: 12px; color: var(--text3); margin-bottom: 5px; }
+.af-fld input {
+  width: 100%; font: inherit; font-size: 13.5px; padding: 8px 10px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.af-fld input:focus { outline: none; border-color: var(--accent); }
+.af-tip { min-height: 17px; font-size: 12.5px; color: var(--text3); line-height: 1.45; }
+.af-tip.ok { color: var(--accent); }
+.af-tip.bad { color: var(--danger); }
+
 /* ---------------- 设置 ---------------- */
 .settings { max-width: 780px; }
 .settings h2 {
