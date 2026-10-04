@@ -8,9 +8,15 @@ import * as player from './player.js';
 import * as eq from './eq.js';
 import { toast, closeMenu } from './ui.js';
 
+// preload='metadata'：只取时长/标签，不把整首歌缓冲进内存
 const audio = new Audio();
-audio.preload = 'auto';
+audio.preload = 'metadata';
 document.body.appendChild(audio);
+
+// 把非首屏必需的工作推到首屏之后，保证启动不被拖慢。
+// 用 setTimeout 而不是 requestIdleCallback：后者在后台标签 / 无渲染环境可能被无限推迟，
+// 会导致「恢复音乐文件夹」这条关键路径永远不执行。
+function defer(fn, ms = 120) { return setTimeout(fn, ms); }
 
 async function boot() {
   loadPrefs();
@@ -19,7 +25,7 @@ async function boot() {
   views.init();
   np.init();
 
-  player.init(audio, views.trackByRel, (a) => eq.ensureGraph(a));
+  player.init(audio, views.trackByRel, () => eq.ensureGraph(audio));
   audio.addEventListener('play', () => eq.resumeCtx());
 
   scanner.onProgress(({ phase, done, total }) => {
@@ -31,29 +37,32 @@ async function boot() {
     setTimeout(() => { if (bar.style.width === `${pct}%`) bar.style.width = '0%'; }, 400);
   });
 
+  // 首屏：直接用本地索引渲染，不等文件系统授权与扫描
   await db.openDB();
   await views.loadFromDB();
   views.render();
 
-  // 恢复已授权的音乐文件夹
-  const perm = await scanner.restoreSavedRoot();
-  if (perm === 'granted') {
-    if (prefs().scanAtBoot) {
-      await scanner.scan();
-      await views.loadFromDB();
-    }
-    views.setReconnectNeeded(false);
-    views.render();
-    await player.restoreState();
-  } else if (perm === 'prompt' || perm === 'denied') {
-    views.setReconnectNeeded(true);
-    views.render();
-  }
-
-  registerSW();
   bindShortcuts();
   bindInstall();
-  bindDebug();
+
+  // 后台：恢复文件夹句柄 → 增量扫描 → 恢复播放状态
+  defer(async () => {
+    let needsRender = false;
+    const perm = await scanner.restoreSavedRoot();
+    if (perm === 'granted') {
+      if (prefs().scanAtBoot) {
+        const r = await scanner.scan();
+        if (r && (r.added || r.removed)) { await views.loadFromDB(); needsRender = true; }
+      }
+      views.setReconnectNeeded(false);
+      await player.restoreState();
+    } else if (perm === 'prompt' || perm === 'denied') {
+      views.setReconnectNeeded(true);
+      needsRender = true;
+    }
+    if (needsRender) views.render();
+    defer(() => { registerSW(); bindDebug(); }, 500);
+  });
 }
 
 // ---------- Service Worker ----------
@@ -93,6 +102,7 @@ function bindShortcuts() {
       case 'r': case 'R': if (hasTrack) { const m = player.cycleRepeat(); toast(m === 'all' ? '列表循环' : m === 'one' ? '单曲循环' : '不循环'); } break;
       case 'l': case 'L': { const t = player.getCurrent(); if (t) views.toggleLike(t); break; }
       case 'f': case 'F': if (hasTrack) np.toggleNP(); break;
+      case 'q': case 'Q': np.toggleQueue(); break;
       case '/': {
         const inp = document.querySelector('.search-wrap input');
         if (inp) { e.preventDefault(); inp.focus(); }
@@ -100,7 +110,8 @@ function bindShortcuts() {
       }
       case 'Escape':
         closeMenu();
-        if (np.isNPOpen()) np.closeNP();
+        if (np.isQueueOpen()) np.toggleQueue(false);
+        else if (np.isNPOpen()) np.closeNP();
         break;
     }
   });
@@ -119,8 +130,7 @@ async function bindDebug() {
     },
     scanner, player, views, eq, np, db,
   };
-  const artMod = await import('./art.js');
-  const metaMod = await import('./metadata.js');
+  const [artMod, metaMod] = await Promise.all([import('./art.js'), import('./metadata.js')]);
   window.__musicDebug.art = artMod;
   window.__musicDebug.metadata = metaMod;
 }

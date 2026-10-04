@@ -8,7 +8,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
-  <meta name="theme-color" content="#f4f5f8">
+  <meta name="theme-color" content="#f7f6f3">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,14 +18,28 @@
   <div id="scanProgress"><div class="bar"></div></div>
 
   <div id="app">
-    <header id="appHeader">
-      <h1></h1>
-    </header>
-    <nav class="tabbar" id="tabbar"></nav>
-    <main id="view"></main>
+    <aside id="sidebar">
+      <div class="brand">
+        <span class="mark" id="brandMark"></span>
+        <span class="brand-text"><b>本地音乐</b><i id="brandSub">离线媒体库</i></span>
+      </div>
+      <nav id="nav" class="nav" aria-label="主导航"></nav>
+      <div class="side-foot">
+        <div class="side-stat"><span id="sideCount">—</span><i>已索引</i></div>
+        <div class="side-src" id="sideSrc" title="未选择音乐文件夹">未选择音乐文件夹</div>
+      </div>
+    </aside>
+
+    <div class="content-col">
+      <header id="appHeader">
+        <h1></h1>
+        <div class="h-actions" id="hActions"></div>
+      </header>
+      <main id="view"></main>
+    </div>
   </div>
 
-  <div id="miniPlayer" class="hidden" role="region" aria-label="迷你播放条"></div>
+  <div id="playbar" class="hidden" role="region" aria-label="播放控制"></div>
 
   <div id="np" aria-label="正在播放"></div>
 

@@ -115,20 +115,62 @@ function albumsOf(list) {
 }
 
 // ---------- 渲染 ----------
-let rootEl, headerEl, tabsEl, contentEl;
+let rootEl, headerEl, navEl, actionsEl, sideCountEl, sideSrcEl, contentEl;
+// 当前视图的完整曲目顺序（分块渲染后 DOM 里只有一部分，队列必须用这个，而不是读 DOM）
+let listContext = [];
+// 分块渲染句柄：每次重渲染前销毁，避免 IntersectionObserver 泄漏
+let chunkHandles = [];
+// 搜索框在重渲染后需要恢复焦点
+let searchFocus = false;
+
+const TABS = [
+  ['songs', '歌曲', 'music'],
+  ['albums', '专辑', 'disc'],
+  ['artists', '歌手', 'mic'],
+  ['playlists', '播放列表', 'playlist'],
+  ['settings', '设置', 'settings'],
+];
 
 export function init() {
   rootEl = document.getElementById('view');
   headerEl = document.querySelector('#appHeader h1');
-  tabsEl = document.getElementById('tabbar');
+  navEl = document.getElementById('nav');
+  actionsEl = document.getElementById('hActions');
+  sideCountEl = document.getElementById('sideCount');
+  sideSrcEl = document.getElementById('sideSrc');
+  const mark = document.getElementById('brandMark');
+  if (mark) mark.innerHTML = icon('music');
 }
 
 export function render() {
+  renderNav();
   renderHeader();
-  renderTabs();
   renderContent();
+  updateSideStats();
   setTimeout(loadVisibleArt, 60);
   window.scrollTo({ top: 0 });
+}
+
+function renderNav() {
+  const counts = { songs: tracks.length };
+  navEl.innerHTML = TABS.map(([id, label, ic]) =>
+    `<button data-tab="${id}" class="${nav.tab === id && !nav.detail ? 'active' : ''}" title="${label}">
+      <span class="ni">${icon(ic)}</span><span class="nl">${label}</span>
+      ${counts[id] != null ? `<span class="nbadge">${counts[id]}</span>` : ''}
+    </button>`).join('');
+  navEl.onclick = (e) => {
+    const b = e.target.closest('[data-tab]');
+    if (b) { nav.tab = b.dataset.tab; nav.detail = null; nav.search = ''; searchFocus = false; render(); }
+  };
+}
+
+function updateSideStats() {
+  if (sideCountEl) sideCountEl.textContent = tracks.length ? String(tracks.length) : '0';
+  if (sideSrcEl) {
+    const name = scanner.hasSource() ? (scanner.state.name || '已连接') : '未选择音乐文件夹';
+    sideSrcEl.textContent = name;
+    sideSrcEl.title = name;
+  }
 }
 
 function renderHeader() {
@@ -140,21 +182,18 @@ function renderHeader() {
   headerEl.style.fontSize = nav.detail ? '16.5px' : '';
   const bb = document.getElementById('btnBack');
   if (bb) bb.addEventListener('click', () => { nav.detail = null; render(); });
-}
 
-function renderTabs() {
-  const tabs = [
-    ['songs', '歌曲'], ['albums', '专辑'], ['artists', '歌手'], ['playlists', '播放列表'], ['settings', '设置'],
-  ];
-  tabsEl.innerHTML = tabs.map(([id, label]) =>
-    `<button data-tab="${id}" class="${nav.tab === id && !nav.detail ? 'active' : ''}">${label}</button>`).join('');
-  tabsEl.onclick = (e) => {
-    const b = e.target.closest('[data-tab]');
-    if (b) { nav.tab = b.dataset.tab; nav.detail = null; nav.search = ''; render(); }
-  };
+  actionsEl.innerHTML = scanner.hasSource()
+    ? `<button class="icon-btn small" id="btnRescanTop" aria-label="重新扫描" title="重新扫描">${icon('refresh')}</button>`
+    : '';
+  const rb = document.getElementById('btnRescanTop');
+  if (rb) rb.addEventListener('click', () => rescanAndRefresh(true));
 }
 
 function renderContent() {
+  // 销毁上一视图的分块观察器
+  for (const h of chunkHandles) h.destroy();
+  chunkHandles = [];
   contentEl = rootEl;
   contentEl.innerHTML = '';
   if (nav.detail) {
@@ -196,7 +235,6 @@ function emptySource() {
 }
 
 // ---------- 歌曲页 ----------
-let chunk = null;
 function renderSongs() {
   const q = norm(nav.search);
   const frag = document.createDocumentFragment();
@@ -206,16 +244,26 @@ function renderSongs() {
   const head = document.createElement('div');
   head.className = 'view-head';
   head.innerHTML = `
+    <h2>歌曲</h2>
     <div class="search-wrap">${icon('search')}<input placeholder="搜索歌曲、歌手、专辑" value="${esc(nav.search)}"><button class="clear" ${nav.search ? '' : 'hidden'}>${icon('x')}</button></div>
-    <button class="icon-btn" id="btnSort" aria-label="排序">${icon('sort')}</button>`;
+    <button class="icon-btn" id="btnSort" aria-label="排序" title="排序">${icon('sort')}</button>`;
   frag.appendChild(head);
-  head.querySelector('input').addEventListener('input', debounce((e) => {
+  const searchInput = head.querySelector('input');
+  searchInput.addEventListener('input', debounce((e) => {
     nav.search = e.target.value;
+    searchFocus = true;
     const cl = head.querySelector('.clear');
     if (cl) cl.hidden = !nav.search;
     refreshList();
   }, 160));
-  head.querySelector('.clear').addEventListener('click', () => { nav.search = ''; head.querySelector('input').value = ''; refreshList(); });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && nav.search) {
+      searchFocus = false; nav.search = ''; searchInput.value = ''; refreshList();
+    }
+  });
+  head.querySelector('.clear').addEventListener('click', () => {
+    nav.search = ''; searchFocus = false; searchInput.value = ''; refreshList();
+  });
   head.querySelector('#btnSort').addEventListener('click', (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     const item = (k, label) => ({ label, icon: 'sort', checked: prefs().sortKey === k, onClick: () => { setPref('sortKey', k); refreshList(); } });
@@ -228,29 +276,30 @@ function renderSongs() {
   });
 
   if (!scanner.hasSource()) {
+    listContext = [];
     frag.appendChild(emptySource());
     contentEl.appendChild(frag);
     return;
   }
 
   const list = sortTracks(tracks.filter(t => matchSearch(t, q)));
-  if (!tracks.length) {
-    const e = emptyList('没有找到音乐文件');
-    e.innerHTML += `<p>确认文件夹里有音频文件后，点击“重新扫描”。</p>`;
+  if (!list.length) {
+    listContext = [];
+    const e = emptyList(tracks.length ? '没有匹配的歌曲' : '没有找到音乐文件');
+    if (!tracks.length) e.innerHTML += `<p>确认文件夹里有音频文件后，点击“重新扫描”。</p>`;
     frag.appendChild(e);
     contentEl.appendChild(frag);
     return;
   }
   const info = document.createElement('div');
-  info.style.cssText = 'display:flex;align-items:center;gap:10px;margin:4px 0 8px';
-  info.innerHTML = `<span style="font-size:13px;color:var(--text3)">共 ${list.length} 首</span>
-    <span style="flex:1"></span>
+  info.className = 'list-info';
+  info.innerHTML = `<span class="count">共 ${list.length} 首</span>
+    <span class="spacer"></span>
     <button class="btn ghost small" id="btnShuffleAll">${icon('shuffle')}随机播放全部</button>`;
   frag.appendChild(info);
   info.querySelector('#btnShuffleAll').addEventListener('click', () => {
     if (!list.length) return toast('没有可播放的歌曲');
-    const shuffled = [...list].sort(() => Math.random() - 0.5).map(t => t.rel);
-    player.playRels(shuffled, shuffled[0]);
+    player.playShuffled(list.map(t => t.rel));
   });
 
   const listEl = document.createElement('div');
@@ -258,17 +307,26 @@ function renderSongs() {
   frag.appendChild(listEl);
   contentEl.appendChild(frag);
 
-  chunk = makeChunkList(listEl, renderTrackRow);
+  // 播放队列取完整列表（不是 DOM 里已渲染的那部分）
+  listContext = list.map(t => t.rel);
+  const chunk = makeChunkList(listEl, renderTrackRow);
   chunk.reset(list);
   bindListEvents(listEl);
+
+  // 重渲染后把光标还给搜索框
+  if (searchFocus && document.activeElement !== searchInput) {
+    searchInput.focus();
+    try { searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length); } catch { /* 某些输入类型不支持 */ }
+  }
 }
 
 function makeChunkList(container, renderRow, size = 60) {
   const sentinel = document.createElement('div');
+  sentinel.className = 'chunk-sentinel';
   let items = [], n = 0;
   const io = new IntersectionObserver((es) => {
     if (es[0].isIntersecting) loadMore();
-  }, { rootMargin: '500px' });
+  }, { rootMargin: '600px' });
   function loadMore() {
     if (n >= items.length) return;
     const end = Math.min(items.length, n + size);
@@ -278,14 +336,20 @@ function makeChunkList(container, renderRow, size = 60) {
   }
   container.appendChild(sentinel);
   io.observe(sentinel);
-  return {
+  const handle = {
     reset(list) {
-      container.querySelectorAll('.trow, .arow').forEach(x => x.remove());
+      container.querySelectorAll('.trow, .arow, .acard').forEach(x => x.remove());
       items = list; n = 0;
-      container.appendChild(sentinel);
+      if (!container.contains(sentinel)) container.appendChild(sentinel);
       loadMore();
     },
+    destroy() {
+      io.disconnect();
+      items = []; n = 0;
+    },
   };
+  chunkHandles.push(handle);
+  return handle;
 }
 
 function renderTrackRow(t, i) {
@@ -297,8 +361,9 @@ function renderTrackRow(t, i) {
     <div class="t-idx"><span>${i + 1}</span></div>
     <div class="t-main">
       <div class="t-title">${esc(t.title)}</div>
-      <div class="t-sub">${esc(t.artist)} · ${esc(t.album)}</div>
+      <div class="t-sub">${esc(t.artist)}</div>
     </div>
+    <div class="t-album">${esc(t.album)}</div>
     <span class="t-dur">${dur}</span>
     <div class="t-act">
       <button class="icon-btn small t-like ${t.liked ? 'liked' : ''}" aria-label="喜欢">${icon('heart')}</button>
@@ -347,8 +412,8 @@ function bindListEvents(listEl, ctx = {}) {
     }
     if (e.target.closest('.t-like')) { toggleLike(t); return; }
     if (player.currentRel() === rel) { player.toggle(); return; }
-    // 播放：以当前列表为队列
-    const rows = [...listEl.querySelectorAll('.trow')].map(x => x.dataset.rel);
+    // 播放：以完整列表为队列（分块渲染时 DOM 里只有前几十行，不能读 DOM）
+    const rows = listContext.length ? listContext : [...listEl.querySelectorAll('.trow')].map(x => x.dataset.rel);
     player.playRels(rows, rel);
   });
   listEl.addEventListener('contextmenu', (e) => {
@@ -440,16 +505,20 @@ function renderAlbums() {
   if (!albums.length) { frag.appendChild(emptyList('没有找到专辑')); contentEl.appendChild(frag); return; }
   const grid = document.createElement('div');
   grid.className = 'grid';
-  for (const a of albums) {
-    const card = document.createElement('div');
-    card.className = 'acard';
-    card.innerHTML = `<div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)} · ${a.tracks.length}首</div>`;
-    card.insertBefore(phNode(a.key, a.tracks[0].rel, extOf(a.tracks[0].name), 'art', 'disc'), card.firstChild);
-    card.addEventListener('click', () => { nav.detail = { type: 'album', key: a.key, title: a.album }; render(); });
-    grid.appendChild(card);
-  }
   frag.appendChild(grid);
   contentEl.appendChild(frag);
+  listContext = [];
+  const c = makeChunkList(grid, renderAlbumCard, 48);
+  c.reset(albums);
+}
+
+function renderAlbumCard(a) {
+  const card = document.createElement('div');
+  card.className = 'acard';
+  card.innerHTML = `<div class="name">${esc(a.album)}</div><div class="sub">${esc(a.artist)} · ${a.tracks.length}首</div>`;
+  card.insertBefore(phNode(a.key, a.tracks[0].rel, extOf(a.tracks[0].name), 'art', 'disc'), card.firstChild);
+  card.addEventListener('click', () => { nav.detail = { type: 'album', key: a.key, title: a.album }; render(); });
+  return card;
 }
 
 function emptyList(msg) {
@@ -482,11 +551,10 @@ async function renderAlbumDetail() {
   actions.className = 'detail-actions';
   actions.innerHTML = `<button class="btn" id="aPlay">${icon('play')}播放</button><button class="btn ghost" id="aShuffle">${icon('shuffle')}随机播放</button>`;
   contentEl.appendChild(actions);
-  actions.querySelector('#aPlay').addEventListener('click', () => player.playRels(sorted.map(t => t.rel), sorted[0].rel));
-  actions.querySelector('#aShuffle').addEventListener('click', () => {
-    const rels = sorted.map(t => t.rel);
-    player.playRels(rels, rels[Math.floor(Math.random() * rels.length)]);
-  });
+  const rels = sorted.map(t => t.rel);
+  listContext = rels;
+  actions.querySelector('#aPlay').addEventListener('click', () => player.playRels(rels, rels[0]));
+  actions.querySelector('#aShuffle').addEventListener('click', () => player.playShuffled(rels));
 
   const listEl = document.createElement('div');
   listEl.className = 'track-list';
@@ -552,11 +620,10 @@ function renderArtistDetail() {
   actions.className = 'detail-actions';
   actions.innerHTML = `<button class="btn" id="aPlay">${icon('play')}播放</button><button class="btn ghost" id="aShuffle">${icon('shuffle')}随机播放</button>`;
   contentEl.appendChild(actions);
-  actions.querySelector('#aPlay').addEventListener('click', () => player.playRels(sorted.map(t => t.rel), sorted[0].rel));
-  actions.querySelector('#aShuffle').addEventListener('click', () => {
-    const rels = sorted.map(t => t.rel);
-    player.playRels(rels, rels[Math.floor(Math.random() * rels.length)]);
-  });
+  const rels = sorted.map(t => t.rel);
+  listContext = rels;
+  actions.querySelector('#aPlay').addEventListener('click', () => player.playRels(rels, rels[0]));
+  actions.querySelector('#aShuffle').addEventListener('click', () => player.playShuffled(rels));
 
   const listEl = document.createElement('div');
   listEl.className = 'track-list';
@@ -633,6 +700,7 @@ function renderPlaylistDetail() {
     ctx = { playlistId: p.id };
   }
   const items = rels.map(r => byRel.get(r)).filter(Boolean);
+  listContext = rels;
 
   const head = document.createElement('div');
   head.className = 'detail-head';
@@ -645,7 +713,7 @@ function renderPlaylistDetail() {
     <button class="btn ghost" id="aShuffle" ${items.length ? '' : 'disabled style="opacity:.5"'}>${icon('shuffle')}随机播放</button>`;
   contentEl.appendChild(actions);
   actions.querySelector('#aPlay').addEventListener('click', () => player.playRels(rels, rels[0]));
-  actions.querySelector('#aShuffle').addEventListener('click', () => player.playRels(rels, rels[Math.floor(Math.random() * rels.length)]));
+  actions.querySelector('#aShuffle').addEventListener('click', () => player.playShuffled(rels));
 
   if (!items.length) { contentEl.appendChild(emptyList('列表为空')); return; }
   const listEl = document.createElement('div');
@@ -708,7 +776,7 @@ function renderSettings() {
 
     <h2>播放</h2>
     <div class="card set-group">
-      <div class="set-row"><div class="lab"><b>显示歌词</b><span>自动读取同名 .lrc 文件</span></div><label class="switch"><input type="checkbox" id="swLyrics" ${p.lyricsOn ? 'checked' : ''}><span class="knob"></span></label></div>
+      <div class="set-row"><div class="lab"><b>显示歌词</b><span>自动读取同名 .lrc / .krc（酷狗）文件</span></div><label class="switch"><input type="checkbox" id="swLyrics" ${p.lyricsOn ? 'checked' : ''}><span class="knob"></span></label></div>
       <div class="set-row"><div class="lab"><b>频谱动画</b><span>正在播放界面底部</span></div><label class="switch"><input type="checkbox" id="swViz" ${p.visualizerOn ? 'checked' : ''}><span class="knob"></span></label></div>
       <div class="set-row"><div class="lab"><b>记住播放进度</b><span>下次打开时恢复上次队列与进度</span></div><label class="switch"><input type="checkbox" id="swRestore" ${p.restoreOn ? 'checked' : ''}><span class="knob"></span></label></div>
     </div>

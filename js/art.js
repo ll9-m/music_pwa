@@ -1,7 +1,16 @@
 // 封面：按专辑懒提取 → 256px 缩略图存 IndexedDB → 内存对象 URL 缓存
 import * as db from './db.js';
-import { extractPicture } from './metadata.js';
 import { getFile } from './scanner.js';
+
+// 元数据解析器（26KB）按需加载：不扫描时完全不进启动路径
+let _extractPicture = null;
+async function extractPicture(file, ext) {
+  if (!_extractPicture) {
+    const mod = await import('./metadata.js');
+    _extractPicture = mod.extractPicture;
+  }
+  return _extractPicture(file, ext);
+}
 
 const mem = new Map();      // albumKey -> objectURL | ''(无封面)
 const pending = new Map();  // albumKey -> Promise

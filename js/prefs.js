@@ -37,7 +37,7 @@ export function setPref(key, val) {
 
 export function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  const colors = { light: '#f4f5f8', dark: '#0e1014', glass: '#cfd9ec' };
+  const colors = { light: '#f7f6f3', dark: '#101214', glass: '#d9e0ea' };
   let meta = document.querySelector('meta[name="theme-color"]');
   if (!meta) {
     meta = document.createElement('meta');

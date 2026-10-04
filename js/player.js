@@ -90,13 +90,19 @@ export function init(audioEl, trackResolver, eqHook) {
 }
 
 // ---------- 时间推进（rAF 驱动 UI；页面隐藏时由 timeupdate 兜底） ----------
-let rafId = 0, lastPosUpdate = 0;
+// 节流到 ~10fps：进度条带 CSS 过渡，肉眼依然平滑，但 DOM 写入量降到 1/6
+let rafId = 0, lastPosUpdate = 0, lastTimeEmit = 0;
+const TIME_EMIT_MS = 100;
 function startRaf() {
   if (rafId) return;
   const loop = () => {
-    emit('time');
+    const now = performance.now();
+    if (now - lastTimeEmit >= TIME_EMIT_MS) {
+      lastTimeEmit = now;
+      emit('time');
+    }
     if (state.playing) rafId = requestAnimationFrame(loop);
-    else rafId = 0;
+    else { rafId = 0; emit('time'); }
   };
   rafId = requestAnimationFrame(loop);
 }
@@ -119,10 +125,12 @@ async function load(rel, { autoplay = true, time } = {}) {
   try {
     const file = await getFile(rel);
     if (!file) throw new Error('文件不可读');
-    if (state.currentUrl) URL.revokeObjectURL(state.currentUrl);
+    const prev = state.currentUrl;
     state.currentUrl = URL.createObjectURL(file);
     audio.src = state.currentUrl;
     audio.load();
+    // 上一个 blob 已与 audio.src 解绑，可安全回收（避免大文件长期驻留内存）
+    if (prev) URL.revokeObjectURL(prev);
   } catch (e) {
     console.error(e);
     toast(`无法读取：${track.title}`);
@@ -139,11 +147,12 @@ async function load(rel, { autoplay = true, time } = {}) {
   scheduleSave();
 }
 
-export async function playRels(rels, startRel) {
+export async function playRels(rels, startRel, { shuffle } = {}) {
+  const useShuffle = shuffle != null ? !!shuffle : isShuffleOn();
   state.baseQueue = [...rels];
   if (state.repeat === 'one') { state.repeat = 'all'; setPref('repeat', 'all'); emit('state'); }
   audio.loop = false;
-  if (isShuffleOn()) {
+  if (useShuffle) {
     const rest = rels.filter(r => r !== startRel);
     state.queue = [startRel, ...shuffleArr(rest)];
   } else {
@@ -153,25 +162,47 @@ export async function playRels(rels, startRel) {
   await load(state.queue[state.pos], { autoplay: true });
 }
 
+/** 以随机顺序播放给定列表，并同步打开「随机播放」状态 */
+export function playShuffled(rels) {
+  if (!rels || !rels.length) return false;
+  const startRel = rels[Math.floor(Math.random() * rels.length)];
+  setPref('shuffleOn', true);
+  emit('state');
+  return playRels(rels, startRel, { shuffle: true });
+}
+
 export function isShuffleOn() {
   // 由 prefs 中的 shuffleOn 控制
   return !!prefs().shuffleOn;
 }
+
+/** 直接设定随机开关（不重排队列时也能保持 UI 与状态一致） */
+export function setShuffle(on) {
+  if (!!prefs().shuffleOn === !!on) return !!on;
+  return toggleShuffle();
+}
+
 export function toggleShuffle() {
   const on = !isShuffleOn();
   setPref('shuffleOn', on);
   const cur = state.queue[state.pos];
-  if (on) {
-    const rest = state.queue.filter((_, i) => i !== state.pos);
-    state.queue = cur != null ? [cur, ...shuffleArr(rest)] : shuffleArr(rest);
-  } else {
-    const ordered = state.baseQueue.filter(r => state.queue.includes(r));
-    for (const r of state.queue) if (!ordered.includes(r)) ordered.push(r);
-    state.queue = ordered;
+  if (state.queue.length) {
+    if (on) {
+      const rest = state.queue.filter((_, i) => i !== state.pos);
+      if (cur != null) state.queue = [cur, ...shuffleArr(rest)];
+    } else {
+      // 还原为原始上下文顺序（用 Set 去重查找，避免大队列下的 O(n²)）
+      const have = new Set(state.queue);
+      const ordered = state.baseQueue.filter(r => have.has(r));
+      const inOrdered = new Set(ordered);
+      for (const r of state.queue) if (!inOrdered.has(r)) { ordered.push(r); inOrdered.add(r); }
+      state.queue = ordered;
+    }
+    if (cur != null) state.pos = Math.max(0, state.queue.indexOf(cur));
   }
-  state.pos = state.queue.indexOf(cur);
+  // 关键：必须派发 state，UI 的随机/循环按钮高亮依赖它
+  emit('state');
   emit('queue');
-  emit('track');
   scheduleSave();
   return on;
 }
@@ -327,7 +358,8 @@ export async function restoreState() {
     state.queue = (ps.queue || []).filter(r => resolveTrack(r));
     state.baseQueue = (ps.baseQueue || []).filter(r => resolveTrack(r));
     state.repeat = ps.repeat || 'all';
-    if (state.queue.length && state.pos < 0) {
+    state.pos = -1;
+    if (state.queue.length) {
       state.pos = Math.min(Math.max(0, ps.pos || 0), state.queue.length - 1);
       await load(state.queue[state.pos], { autoplay: false, time: ps.time || 0 });
       return true;

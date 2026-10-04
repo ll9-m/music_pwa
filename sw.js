@@ -1,5 +1,5 @@
 // Service Worker：预缓存应用外壳，离线可用（音乐文件本身通过 File System Access 读取，不走网络）
-const CACHE = 'local-music-pwa-v1';
+const CACHE = 'local-music-pwa-v2';
 const ASSETS = [
   './',
   './index.html',

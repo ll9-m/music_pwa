@@ -5,15 +5,22 @@ export const BANDS = [60, 230, 910, 3600, 14000];
 
 let ctx = null;
 let source = null;
+let audioEl = null;
 let filters = [];
 let analyser = null;
 let hooked = false;
+let freqBuf = null;   // 频谱数据缓冲，复用避免每帧分配
 
+/** 惰性接入 WebAudio：只有均衡器或频谱真正需要时才建图 */
 export function ensureGraph(audio) {
+  if (audio) audioEl = audio;
   if (hooked) { if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => { }); return; }
+  if (!audioEl) { audioEl = audio || null; }
+  if (!audioEl) return;
+  if (!prefs().eqOn && !prefs().visualizerOn) return;
   try {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
-    source = ctx.createMediaElementSource(audio);
+    source = ctx.createMediaElementSource(audioEl);
     filters = BANDS.map((f, i) => {
       const q = ctx.createBiquadFilter();
       q.type = i === 0 ? 'lowshelf' : i === BANDS.length - 1 ? 'highshelf' : 'peaking';
@@ -44,7 +51,8 @@ export function applyGains(gains, enabled) {
 
 export function setEqOn(on) {
   setPref('eqOn', on);
-  if (hooked) applyGains(prefs().eqGains, on);
+  if (on) ensureGraph();
+  else if (hooked) applyGains(prefs().eqGains, false);
 }
 export function setGain(i, db) {
   const g = [...prefs().eqGains];
@@ -69,7 +77,8 @@ export function drawSpectrum(canvas, accent) {
   const g = canvas.getContext('2d');
   g.clearRect(0, 0, canvas.width, canvas.height);
   const n = 28;
-  const data = new Uint8Array(an.frequencyBinCount);
+  if (!freqBuf || freqBuf.length !== an.frequencyBinCount) freqBuf = new Uint8Array(an.frequencyBinCount);
+  const data = freqBuf;
   an.getByteFrequencyData(data);
   const bw = canvas.width / n;
   for (let i = 0; i < n; i++) {

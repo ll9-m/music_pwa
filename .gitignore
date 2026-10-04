@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+.smoke/
+testdata/
+workd/
+orphan-lyrics-report.txt
+.workbuddy/
