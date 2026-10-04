@@ -6,9 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "icons": "node scripts/gen-icons.js",
-    "test": "node scripts/test-bili.mjs && node scripts/test-bili-proxy.mjs",
+    "test": "node scripts/test-bili.mjs && node scripts/test-bili-proxy.mjs && node scripts/test-sw-assets.mjs",
     "test:bili": "node scripts/test-bili.mjs",
     "test:proxy": "node scripts/test-bili-proxy.mjs",
+    "test:sw": "node scripts/test-sw-assets.mjs",
     "test:ui": "node scripts/test-anime-ui.mjs",
     "test:lyrics": "node scripts/test-lyrics.mjs"
   },

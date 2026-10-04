@@ -1,5 +1,7 @@
 // Service Worker：预缓存应用外壳，离线可用（音乐文件本身通过 File System Access 读取，不走网络）
-const CACHE = 'local-music-pwa-v2';
+// 缓存版本号：改动任何被缓存的资源后必须 +1，否则用户会继续用旧缓存（上一版把 v2 用在了
+// 首次引入 lyrics.js 时，这次新增 bili.js 同样必须升版）。
+const CACHE = 'local-music-pwa-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +19,9 @@ const ASSETS = [
   './js/lyrics.js',
   './js/views.js',
   './js/np.js',
+  // 番剧库：B 站链接解析。漏掉它的话，离线状态下 views.js 的 import 会失败 ——
+  // 不是「番剧页打不开」，而是整个应用白屏（ES module 加载失败会中断整条 import 链）。
+  './js/bili.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-192.png',

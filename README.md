@@ -37,10 +37,32 @@ node server.js        # 默认 http://localhost:8080
 - **正在播放**：大封面 + 主色氛围光、频谱动画、队列抽屉（可拖拽排序、点选跳转、移除）
 - **歌词**：自动读取与歌曲同名的 `.lrc` 文件，逐行高亮 + 自动滚动，点击歌词行跳转
 - **播放列表**：新建 / 重命名 / 删除，收藏（喜欢）与最近播放智能列表
+- **番剧库**：粘贴 B 站链接即可在应用内播放（详见下节）
 - **均衡器**：5 段 EQ（60Hz – 14kHz），带预设
 - **快捷键**：空格播放暂停、`←→` 快退快进、`↑↓` 音量、`P/N` 上下首、`M` 静音、`S` 随机、`R` 循环、`L` 喜欢、`F` 正在播放全屏、`Q` 播放队列、`/` 搜索
 - **主题**：浅色 / 深色 / 液态玻璃（毛玻璃 + 动态色斑背景）
 - **完全离线**：Service Worker 预缓存全部资源，断网可用；媒体键 / 锁屏控制（Media Session）
+
+## 番剧库
+
+在左侧导航点「**番剧**」→「添加」，把 B 站链接粘进去即可。支持这些形态：
+
+| 你粘的链接 | 能否在应用内播放 |
+|---|---|
+| `bilibili.com/video/BV1kx411k7VB`、`BV1kx411k7VB` | **直接能播** |
+| `bilibili.com/bangumi/play/ss4181`（番剧播放页） | 需先补全，见下 |
+| `bilibili.com/bangumi/play/ep102167`（单集） | 需先补全 |
+| `bilibili.com/video/av8937736` | 需先补全 |
+| `b23.tv/xxxx` 短链 | 跳转 B 站 |
+
+**关于番剧播放页（ss / ep 号）**：这类地址里是番剧 id，不是播放器直接能用的 `bvid`，必须先查一次才能内嵌。而 B 站的接口**拒绝跨域直连**（返回 403），所以浏览器自己查不了。
+
+因此：**用 `node server.js` 启动时**，点「尝试补全」即可自动查出版番剧信息（含选集），之后就能在应用内播放和选集了。**用 GitHub Pages 线上版时**没有这个本地服务，番剧播放页会明确显示「需补全」并提供「在 B 站打开」——不会给你一个白屏的播放器。
+
+> BV / av 号的视频**在任何环境下都能直接内嵌播放**，不依赖本地服务。
+
+播放器用的是 B 站官方地址（`player.bilibili.com`）。每个番剧页顶部都有「在 B 站打开」按钮——B 站若调整嵌入策略，内嵌可能失效，那里有唯一可靠的退路。
+
 
 ## 支持的格式
 
@@ -53,12 +75,19 @@ MP3（含 ID3v1 / v2.2 / v2.3 / v2.4）、FLAC、M4A / AAC（MP4）、OGG（Vorb
 - 文件访问：File System Access API（句柄持久化到 IndexedDB），降级方案为 `webkitdirectory` 文件选择
 - 元数据解析为手写实现（`js/metadata.js`），按需切片读取文件，不整文件载入内存
 - 封面按专辑懒提取，缩略图（WebP 256px）缓存在 IndexedDB
-- `node server.js` 只是一个静态服务器（支持 Range），你也可以用任何静态服务器代替
+- `node server.js` 是静态服务器（支持 Range），另外提供一个 `/api/bili` 代理用于补全番剧信息；你也可以用任何静态服务器代替（此时番剧补全不可用，其余功能不受影响）
 
 ## 开发
 
 ```bash
-npm run icons   # 重新生成图标
-npm test        # 元数据解析器单元测试（Node）
+npm run icons       # 重新生成图标
+npm test            # 链接解析器 + 番剧代理测试（零依赖，Node）
+npm run test:ui     # 番剧库界面测试（需 jsdom，见下）
+npm run test:lyrics # 歌词解析测试
 node .smoke/smoke.mjs   # 浏览器冒烟测试（需先 node server.js，会注入 240 首测试数据并截图到 .smoke/）
 ```
+
+> `test:ui` 需要 jsdom，但本项目坚持**零运行时依赖**，所以它借用工作区里已有的 jsdom 而不写进 `dependencies`。
+> 用法：`NODE_PATH=<含 jsdom 的 node_modules> npm run test:ui`
+> 默认的 `npm test` 只跑零依赖的解析器与代理测试。
+
