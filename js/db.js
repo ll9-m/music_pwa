@@ -1,6 +1,6 @@
-// IndexedDB 封装：tracks / art / playlists / handles / kv / anime
+// IndexedDB 封装：tracks / art / playlists / handles / kv
 const DB_NAME = 'local-music-pwa';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let _db = null;
 
@@ -15,9 +15,8 @@ export function openDB() {
       if (!db.objectStoreNames.contains('playlists')) db.createObjectStore('playlists', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('handles')) db.createObjectStore('handles', { keyPath: 'key' });
       if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'k' });
-      // v2：番剧库。keyPath 用 id 而非 rel —— 番剧与音频文件无关，
-      // 重新扫描音乐文件夹不该影响它，所以刻意不进 tracks 表。
-      if (!db.objectStoreNames.contains('anime')) db.createObjectStore('anime', { keyPath: 'id' });
+      // v3：番剧库已移除，清理掉 v2 建的 anime 表（版本只能升不能降，不能退回 v2）
+      if (db.objectStoreNames.contains('anime')) db.deleteObjectStore('anime');
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
     req.onerror = () => reject(req.error);
@@ -65,11 +64,3 @@ export const putHandle = (key, handle) => tx('handles', 'readwrite', s => s.put(
 // ---- kv (播放状态等) ----
 export const kvGet = (k) => tx('kv', 'readonly', s => wrap(s.get(k)).then(r => r ? r.v : undefined));
 export const kvSet = (k, v) => tx('kv', 'readwrite', s => s.put({ k, v }));
-
-// ---- anime (番剧库) ----
-export const getAllAnime = () => tx('anime', 'readonly', s => wrap(s.getAll()));
-export const getAnime = (id) => tx('anime', 'readonly', s => wrap(s.get(id)));
-export const putAnime = (a) => tx('anime', 'readwrite', s => s.put(a));
-export const bulkPutAnime = (list) => tx('anime', 'readwrite', s => { for (const a of list) s.put(a); });
-export const deleteAnime = (id) => tx('anime', 'readwrite', s => s.delete(id));
-export const clearAnime = () => tx('anime', 'readwrite', s => s.clear());

@@ -28,7 +28,7 @@ const sw = read('sw.js');
 const m = sw.match(/const ASSETS = \[([\s\S]*?)\];/);
 if (!m) { console.log('未找到 ASSETS 列表'); process.exit(1); }
 // 必须先剥注释 —— 第一版直接按行 split，把 ASSETS 里的注释行
-// 当成了清单项，报出「// 番剧库… 路径格式不对」这种假失败。
+// 当成了清单项，报出「路径格式不对」这种假失败。
 const listed = m[1]
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/\/\/.*$/gm, '')
@@ -69,10 +69,10 @@ for (const item of listed) {
 console.log('\n=== 缓存版本 ===');
 t('缓存版本号存在', () => /const CACHE = '.*-v\d+'/.test(sw) || '未找到版本号');
 
-t('新增模块时版本号已升过（bili.js 对应 v3）', () => {
+t('缓存版本号不低于 v4（移除番剧库后必须升版）', () => {
   const v = sw.match(/const CACHE = '.*-v(\d+)'/);
   if (!v) return '未找到版本号';
-  if (Number(v[1]) < 3) return '版本仍是 v' + v[1] + '，新增 bili.js 后必须升版，否则用户继续用旧缓存';
+  if (Number(v[1]) < 4) return '版本仍是 v' + v[1] + '，改动缓存清单后必须升版，否则用户继续用旧缓存';
   return true;
 });
 

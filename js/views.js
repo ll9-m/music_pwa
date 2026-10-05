@@ -7,14 +7,12 @@ import * as player from './player.js';
 import * as art from './art.js';
 import * as eq from './eq.js';
 import { BANDS } from './eq.js';
-import * as bili from './bili.js';
 
 export const APP_VERSION = '1.0.0';
 
 let tracks = [];
 const byRel = new Map();
 let playlists = [];
-let animeList = [];      // 番剧库（与音频文件无关，重新扫描音乐文件夹不影响它）
 
 export const nav = { tab: 'songs', detail: null, search: '' };
 let deferredPrompt = null;
@@ -31,20 +29,6 @@ export async function loadFromDB() {
 
 export async function loadPlaylists() {
   playlists = await db.getPlaylists();
-}
-
-/**
- * 读番剧库。
- * 刻意**不做**「整个会话只读一次」的缓存：那类缓存必须由每条写入路径手动失效，
- * 漏一条就表现为「我明明改了，页面还是旧的」——
- * 而番剧记录会被表单、菜单删除、补全写回等多条路径修改，很难保证全覆盖。
- * 这里改成「每次需要显示番剧时都重读」：番剧数量是几十级别、读取是一次 getAll，
- * 代价远小于缓存不一致的代价。
- */
-async function loadAnime() {
-  try {
-    animeList = await db.getAllAnime();
-  } catch { animeList = []; }
 }
 
 // ---------- 封面懒加载 ----------
@@ -167,7 +151,6 @@ const TABS = [
   ['albums', '专辑', 'disc'],
   ['artists', '歌手', 'mic'],
   ['playlists', '播放列表', 'playlist'],
-  ['anime', '番剧', 'screen'],
   ['settings', '设置', 'settings'],
 ];
 
@@ -182,14 +165,7 @@ export function init() {
   if (mark) mark.innerHTML = icon('music');
 }
 
-export async function render() {
-  // 番剧数据必须在渲染前就位（renderContent 刻意保持同步，见其注释）。
-  // 每次都重读而不做「已加载」缓存：番剧是几十条量级、getAll 是一次事务，
-  // 代价可忽略；而任何缓存都必须由每条写入路径手动失效，
-  // 漏一条就是「我明明改了，页面还是旧的」。这里选择消灭这类 bug 的土壤。
-  if (nav.tab === 'anime' || (nav.detail && nav.detail.type === 'anime')) {
-    await loadAnime();
-  }
+export function render() {
   renderNav();
   renderHeader();
   renderContent();
@@ -247,10 +223,8 @@ function renderContent() {
     if (nav.detail.type === 'album') return renderAlbumDetail();
     if (nav.detail.type === 'artist') return renderArtistDetail();
     if (nav.detail.type === 'playlist') return renderPlaylistDetail();
-    if (nav.detail.type === 'anime') return renderAnimeDetail(nav.detail.key);
   }
-  // 刻意保持同步：番剧数据由 ensureAnime() 在 render() 之前预载好。
-  // 早期版本把这里改成 async，结果 24 个调用点全部拿到未完成的 Promise ——
+  // 刻意保持同步：早期版本把这里改成 async，结果 24 个调用点全部拿到未完成的 Promise ——
   // 同步部分照跑、switch 被推到微任务，表现为「页面空白且无报错」，
   // 极难定位。异步数据必须在渲染前 await 完，不该渗进渲染函数。
   switch (nav.tab) {
@@ -258,7 +232,6 @@ function renderContent() {
     case 'albums': return renderAlbums();
     case 'artists': return renderArtists();
     case 'playlists': return renderPlaylists();
-    case 'anime': return renderAnime();
     case 'settings': return renderSettings();
   }
 }
@@ -685,290 +658,6 @@ function renderArtistDetail() {
   bindListEvents(listEl);
 }
 
-// ---------- 番剧库 ----------
-// 定位：它是「音乐播放器的附赠」，不是第二个视频播放器。
-// 所以内嵌播放器是主路径，但「在 B 站打开」永远在同一个位置 ———
-// B 站随时可能改嵌入策略，内嵌一旦失效不能只剩白屏。
-
-/** 把番剧补全为可内嵌（需本地 server.js 代理）。成功则写回记录。 */
-async function resolveAnime(id) {
-  const rec = animeList.find(x => x.id === id);
-  if (!rec) return null;
-  const parsed = bili.parseBiliURL(rec.url);
-  const got = await bili.resolveEmbeddable(parsed);
-  if (!got) return null;
-  rec.bvid = got.bvid;
-  rec.cid = got.cid || rec.cid || 0;
-  if (got.title && !rec.title) rec.title = got.title;
-  if (got.cover) rec.cover = got.cover;
-  if (got.episodes && got.episodes.length) {
-    rec.episodes = got.episodes;
-    rec.currentIndex = got.currentIndex || 0;
-  }
-  await db.putAnime(rec);
-  return rec;
-}
-
-function animeCard(rec) {
-  const card = document.createElement('div');
-  card.className = 'anime-card';
-  const embeddable = bili.canEmbed(rec);
-  const cover = rec.cover
-    ? `<img class="ac-cover" src="${esc(rec.cover)}" alt="" loading="lazy">`
-    : `<div class="ac-cover ac-ph" style="background:${gradFor(rec.id)}">${icon('screen')}</div>`;
-  card.innerHTML = `${cover}
-    <div class="ac-body">
-      <div class="ac-title">${esc(rec.title || '未命名番剧')}</div>
-      <div class="ac-sub">${esc(animeSubtitle(rec))}</div>
-    </div>
-    <button class="icon-btn small ac-more" aria-label="更多">${icon('more')}</button>`;
-
-  card.addEventListener('click', async (e) => {
-    if (e.target.closest('.ac-more')) {
-      const r = e.target.closest('.ac-more').getBoundingClientRect();
-      showMenu(animeMenu(rec), r.left, r.bottom + 4);
-      return;
-    }
-    nav.detail = { type: 'anime', key: rec.id, title: rec.title || '番剧' };
-    render();
-  });
-  return card;
-}
-
-function animeSubtitle(rec) {
-  const bits = [];
-  if (rec.kind === 'ss') bits.push(`ss${rec.seasonId}`);
-  else if (rec.kind === 'ep') bits.push(`ep${rec.epId}`);
-  else if (rec.kind === 'av') bits.push(`av${rec.aid}`);
-  if (rec.episodes && rec.episodes.length) bits.push(`${rec.episodes.length} 集`);
-  if (bili.canEmbed(rec)) bits.push('可内嵌');
-  else bits.push('点开跳官网');
-  return bits.join(' · ');
-}
-
-function animeMenu(rec) {
-  return [
-    { label: '播放', icon: 'play', onClick: () => { nav.detail = { type: 'anime', key: rec.id, title: rec.title || '番剧' }; render(); } },
-    { label: '在 B 站打开', icon: 'external', onClick: () => window.open(bili.watchURL(rec), '_blank', 'noopener') },
-    { label: '重命名', icon: 'edit', onClick: async () => {
-      const name = await promptDialog('重命名番剧', '番剧名称', rec.title || '');
-      if (name) { rec.title = name.trim(); await db.putAnime(rec); renderContent(); }
-    } },
-    ...(bili.canEmbed(rec) ? [] : [{
-      label: '尝试补全为可内嵌', icon: 'refreshBili', onClick: async () => {
-        toast('正在通过本地服务补全…');
-        const got = await resolveAnime(rec.id);
-        toast(got ? '补全成功，可在页面内播放' : '补全失败（需用 node server.js 启动本地服务）');
-        renderContent();
-      },
-    }]),
-    '-',
-    { label: '删除', icon: 'trash', danger: true, onClick: async () => {
-      if (await confirmDialog('删除番剧', `确定删除「${rec.title || '未命名番剧'}」？仅删除这条记录，不会影响音乐库。`, '删除', true)) {
-        await db.deleteAnime(rec.id);
-        animeList = animeList.filter(x => x.id !== rec.id);
-        renderContent();
-      }
-    } },
-  ];
-}
-
-function renderAnime() {
-  const frag = document.createDocumentFragment();
-  const head = document.createElement('div');
-  head.className = 'view-head';
-  head.innerHTML = `<h2>番剧</h2>
-    <div class="search-wrap" style="max-width:260px">${icon('search')}<input placeholder="搜索番剧" value="${esc(nav.search)}"></div>
-    <button class="btn small" id="btnAddAnime">${icon('plus')}添加</button>`;
-  const animeSearch = head.querySelector('input');
-  bindSearch(animeSearch, (v) => { nav.search = v; searchFocus = true; renderContent(); restoreSearchFocus(); });
-  head.querySelector('#btnAddAnime').addEventListener('click', () => animeForm());
-  frag.appendChild(head);
-
-  const q = norm(nav.search);
-  const list = q ? animeList.filter(a => norm(a.title).includes(q) || norm(a.url).includes(q)) : animeList;
-
-  if (!animeList.length) {
-    const d = document.createElement('div');
-    d.className = 'empty card';
-    d.style.cssText = 'padding:48px 24px;margin-top:18px';
-    d.innerHTML = `${icon('screen')}<b>还没有添加番剧</b>
-      <p>把 B 站番剧链接粘进来就能在应用内播放；只填链接也可以，标题可以之后补。<br>
-      支持番剧播放页（ss / ep 号）、普通视频（BV / av 号）与 b23.tv 短链。</p>
-      <button class="btn">${icon('plus')}添加番剧</button>`;
-    d.querySelector('button').addEventListener('click', () => animeForm());
-    frag.appendChild(d);
-  } else if (!list.length) {
-    const d = document.createElement('div');
-    d.className = 'empty card';
-    d.style.cssText = 'padding:40px 24px;margin-top:18px';
-    d.innerHTML = `${icon('search')}<b>没有匹配的番剧</b>`;
-    frag.appendChild(d);
-  } else {
-    const grid = document.createElement('div');
-    grid.className = 'anime-grid';
-    // 新的在前
-    for (const rec of [...list].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))) {
-      grid.appendChild(animeCard(rec));
-    }
-    frag.appendChild(grid);
-  }
-  rootEl.appendChild(frag);
-}
-
-/**
- * 添加/编辑表单。
- * 用项目原生的 <dialog> + .dlg-body/.dlg-actions，而不是自造 .modal 类：
- * 另起一套弹窗样式会让 Esc 关闭、点遮罩关闭、焦点管理全部要重写一遍，
- * 而这些 confirmDialog/promptDialog 已经处理好了。
- */
-function animeForm(existing) {
-  const rec = existing || { id: '', title: '', url: '' };
-  const d = document.createElement('dialog');
-  document.body.appendChild(d);
-  d.innerHTML = `<div class="dlg-body af-body">
-      <b>${existing ? '编辑番剧' : '添加番剧'}</b>
-      <label class="af-fld"><span>B 站链接</span>
-        <input id="afUrl" placeholder="https://www.bilibili.com/bangumi/play/ss4181" value="${esc(rec.url)}"></label>
-      <div class="af-tip" id="afTip"></div>
-      <label class="af-fld"><span>标题（可留空）</span>
-        <input id="afTitle" placeholder="留空则用番剧名" value="${esc(rec.title)}"></label>
-    </div>
-    <div class="dlg-actions">
-      <button class="btn text" data-a="cancel">取消</button>
-      <button class="btn" data-a="save">保存</button>
-    </div>`;
-  d.classList.add('anime-dlg');
-
-  const urlEl = d.querySelector('#afUrl');
-  const tipEl = d.querySelector('#afTip');
-  const titleEl = d.querySelector('#afTitle');
-  const saveEl = d.querySelector('[data-a=save]');
-
-  // 实时校验：边输入边说明这个链接能不能内嵌。
-  // 不做的话用户会以为「保存了就能播」，点开却是跳转 —— 预期落差比功能缺失更伤。
-  function validate() {
-    const v = urlEl.value.trim();
-    if (!v) { tipEl.textContent = ''; tipEl.className = 'af-tip'; saveEl.disabled = true; return true; }
-    const p = bili.parseBiliURL(v);
-    if (!p.ok) {
-      tipEl.textContent = p.reason;
-      tipEl.className = 'af-tip bad';
-      saveEl.disabled = true;
-      return false;
-    }
-    saveEl.disabled = false;
-    if (p.embeddable) { tipEl.textContent = '✓ 可在应用内直接播放'; tipEl.className = 'af-tip ok'; }
-    else if (p.needFetch) { tipEl.textContent = '可保存。番剧播放页（ss/ep 号）需先补全才能内嵌，否则跳转 B 站'; tipEl.className = 'af-tip'; }
-    else { tipEl.textContent = '短链无法本地解析，将跳转 B 站'; tipEl.className = 'af-tip'; }
-    return true;
-  }
-  urlEl.addEventListener('input', validate);
-  validate();
-
-  const close = () => { d.close(); d.remove(); };
-  d.querySelector('[data-a=cancel]').addEventListener('click', close);
-  d.addEventListener('cancel', () => close());
-  d.addEventListener('click', (e) => { if (e.target === d) close(); });
-  d.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !saveEl.disabled) { e.preventDefault(); saveEl.click(); }
-  });
-  d.querySelector('[data-a=save]').addEventListener('click', async () => {
-    if (!validate()) return;
-    const v = urlEl.value.trim();
-    const now = bili.makeRecord({ id: rec.id || undefined, title: titleEl.value.trim(), url: v });
-    // 续用已有补全结果，避免重新解析、也避免清掉已选集
-    if (existing) {
-      now.bvid = rec.bvid || now.bvid;
-      now.cid = rec.cid || now.cid;
-      now.cover = rec.cover || now.cover;
-      now.episodes = rec.episodes || now.episodes;
-      now.currentIndex = rec.currentIndex || 0;
-    }
-    await db.putAnime(now);
-    await loadAnime();
-    close();
-    toast(existing ? '已保存' : '已添加');
-    if (nav.tab === 'anime') renderContent(); else render();
-  });
-  d.showModal();
-  setTimeout(() => { urlEl.focus(); urlEl.select(); }, 50);
-}
-
-function renderAnimeDetail(id) {
-  const rec = animeList.find(x => x.id === id);
-  if (!rec) { toast('番剧不存在'); return renderAnime(); }
-  const frag = document.createDocumentFragment();
-  const head = document.createElement('div');
-  head.className = 'view-head';
-  head.innerHTML = `<h2>${esc(rec.title || '番剧')}</h2>
-    <button class="btn ghost small" id="adEdit">${icon('edit')}编辑</button>
-    <button class="btn small" id="adOpen">${icon('external')}在 B 站打开</button>`;
-  head.querySelector('#adEdit').addEventListener('click', () => animeForm(rec));
-  head.querySelector('#adOpen').addEventListener('click', () => window.open(bili.watchURL(rec), '_blank', 'noopener'));
-  frag.appendChild(head);
-
-  const box = document.createElement('div');
-  box.className = 'anime-detail';
-  frag.appendChild(box);
-  rootEl.appendChild(frag);
-
-  const eps = rec.episodes || [];
-  let cur = {
-    bvid: rec.bvid || (eps[rec.currentIndex || 0] || {}).bvid || '',
-    cid: rec.cid || (eps[rec.currentIndex || 0] || {}).cid || 0,
-  };
-
-  function drawPlayer() {
-    if (bili.canEmbed(rec) || cur.bvid) {
-      const src = bili.embedURL(cur.bvid, { cid: cur.cid });
-      box.innerHTML = `<div class="ap-frame">
-          <iframe src="${esc(src)}" scrolling="no" frameborder="0"
-                  allowfullscreen="true" referrerpolicy="no-referrer"
-                  title="${esc(rec.title || '番剧播放器')}"></iframe>
-        </div>
-        <div class="ap-note">${icon('info')}<span>播放器来自 B 站官方地址。若无法播放，请用上方「在 B 站打开」。</span></div>`;
-    } else {
-      // 没有 bvid 就绝不显示空 iframe —— 那是「以为能播但白屏」的最坏体验
-      box.innerHTML = `<div class="ap-none card">
-          <b>这条链接暂不能在应用内播放</b>
-          <p>你粘贴的是番剧播放页（${esc(rec.kind)} 号），需要先查到播放器地址。<br>
-             若你正用 <code>node server.js</code> 启动，点下面按钮可以自动补全。</p>
-          <div class="ap-none-acts">
-            <button class="btn" id="apTry">${icon('refresh')}尝试补全</button>
-            <button class="btn primary" id="apGo">${icon('external')}在 B 站打开</button>
-          </div>
-        </div>`;
-      box.querySelector('#apGo').addEventListener('click', () => window.open(bili.watchURL(rec), '_blank', 'noopener'));
-      box.querySelector('#apTry').addEventListener('click', async (e) => {
-        const btn = e.currentTarget;
-        btn.disabled = true; btn.textContent = '补全中…';
-        const got = await resolveAnime(rec.id);
-        if (got) { toast('补全成功'); renderContent(); }
-        else { toast('补全失败：请确认用 node server.js 启动'); btn.disabled = false; btn.innerHTML = icon('refreshBili') + '重试'; }
-      });
-    }
-
-    if (eps.length > 1) {
-      const list = document.createElement('div');
-      list.className = 'ap-eps';
-      eps.forEach((e, i) => {
-        const b = document.createElement('button');
-        b.className = 'ap-ep' + (i === (rec.currentIndex || 0) ? ' on' : '');
-        b.textContent = e.title || ('第 ' + (i + 1) + ' 集');
-        b.addEventListener('click', () => {
-          cur = { bvid: e.bvid, cid: e.cid };
-          rec.currentIndex = i;
-          db.putAnime(rec);
-          drawPlayer();
-        });
-        list.appendChild(b);
-      });
-      box.appendChild(list);
-    }
-  }
-  drawPlayer();
-}
 
 // ---------- 播放列表页 ----------
 function renderPlaylists() {
