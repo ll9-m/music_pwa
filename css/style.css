@@ -15,6 +15,8 @@ body {
   color: var(--text);
   background: var(--bg);
   min-height: 100dvh;
+  /* 最小可用宽度：窗口/浏览器缩放再小，布局也不塌陷，只会出现横向滚动条 */
+  min-width: 320px;
   overscroll-behavior-y: none;
   transition: background-color .25s ease, color .25s ease;
 }
@@ -22,6 +24,13 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 input { font: inherit; color: inherit; }
 img { display: block; }
 [hidden] { display: none !important; }
+
+/* 裸图标兜底：ui.js 的 icon() 生成的 SVG 没有宽高属性，一旦出现在没有专门规则约束
+   的 flex/grid 容器里（如歌手行 .arow 的返回箭头），会被拉伸成几百像素巨型图标，
+   把同行文字挤成竖排。这里给所有装饰性图标一个安全默认尺寸；
+   各上下文的具体规则（.btn svg / .search-wrap svg / .nav .ni svg 等，均定义于本文件
+   更后面，同或更高优先级、更晚生效）会正常覆盖它。 */
+svg[aria-hidden="true"] { width: 18px; height: 18px; flex: none; }
 ::selection { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 
 /* 数字/时间统一等宽，避免跳动 */
@@ -397,6 +406,7 @@ html[data-theme="glass"] .np-sheet {
 /* ---------------- 歌手 ---------------- */
 .arow { display: flex; align-items: center; gap: 14px; padding: 9px 10px; border-radius: 10px; cursor: pointer; }
 .arow:hover { background: var(--row-hover); }
+.arow > svg { transform: rotate(180deg); color: var(--text3); }
 .avatar {
   width: 46px; height: 46px; border-radius: 999px; flex: none;
   display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 17px;
@@ -440,7 +450,8 @@ html[data-theme="glass"] .np-sheet {
 
 
 /* ---------------- 设置 ---------------- */
-.settings { max-width: 780px; }
+/* 设置页与其他页一致占满内容区宽度（跟随窗口自适应，不再固定 780px 留白） */
+.settings { max-width: none; }
 .settings h2 {
   font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase;
   color: var(--text3); font-weight: 700; margin: 26px 0 8px;

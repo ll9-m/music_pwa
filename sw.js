@@ -1,7 +1,7 @@
 // Service Worker：预缓存应用外壳，离线可用（音乐文件本身通过 File System Access 读取，不走网络）
 // 缓存版本号：改动任何被缓存的资源后必须 +1，否则用户会继续用旧缓存
-// （v2 用在了首次引入 lyrics.js 时，v3 是番剧库，v4 是移除番剧库）。
-const CACHE = 'local-music-pwa-v4';
+// （v2 用在了首次引入 lyrics.js 时，v3 是番剧库，v4 是移除番剧库，v5 是自适应布局修复）。
+const CACHE = 'local-music-pwa-v5';
 const ASSETS = [
   './',
   './index.html',

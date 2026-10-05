@@ -618,8 +618,6 @@ function renderArtists() {
     const grad = gradFor(a.name);
     row.innerHTML = `<div class="avatar" style="background:${grad}">${esc(a.name.slice(0, 1).toUpperCase())}</div>
       <div style="flex:1;min-width:0"><div class="name">${esc(a.name)}</div><div class="sub">${a.albums.size} 张专辑 · ${a.tracks.length} 首</div></div>${icon('back')}`;
-    row.querySelector('svg').style.transform = 'rotate(180deg)';
-    row.querySelector('svg').style.color = 'var(--text3)';
     row.addEventListener('click', () => { nav.detail = { type: 'artist', key: a.name, title: a.name }; render(); });
     list.appendChild(row);
   }
