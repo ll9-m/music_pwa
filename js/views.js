@@ -100,6 +100,29 @@ function matchSearch(t, q) {
   return norm(t.title).includes(q) || norm(t.artist).includes(q) || norm(t.album).includes(q);
 }
 
+// ---------- 搜索框通用绑定 ----------
+// IME 组合期间（打拼音未选字）绝不能触发过滤/重渲染：重渲染会替换输入框或抢焦点，
+// 直接掐断输入法，表现为「只能打出拼音字母、中文打不出来」。
+// 组合结束后（compositionend）再统一读取最终文本执行一次过滤。
+function bindSearch(input, onQuery) {
+  let composing = false;
+  input.addEventListener('compositionstart', () => { composing = true; });
+  input.addEventListener('compositionend', () => { composing = false; onQuery(input.value); });
+  input.addEventListener('input', () => { if (!composing) onQuery(input.value); });
+}
+// 重渲染后把焦点与光标还给搜索框（只在搜索态下需要）。
+// 延迟到本轮同步渲染结束后执行：渲染函数用 frag 组装、可能尚未挂载 DOM，
+// 提前 focus() 不生效；且重渲染会替换输入框，必须重新查询。
+function restoreSearchFocus() {
+  setTimeout(() => {
+    const input = document.querySelector('.search-wrap input');
+    if (searchFocus && input && document.activeElement !== input) {
+      input.focus();
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* 某些输入类型不支持 */ }
+    }
+  }, 0);
+}
+
 const numSort = (k) => (a, b) => ((a[k] ?? -1) - (b[k] ?? -1));
 function sortTracks(list, key = prefs().sortKey, dir = prefs().sortDir) {
   const cmp = {
@@ -279,13 +302,14 @@ function renderSongs() {
     <button class="icon-btn" id="btnSort" aria-label="排序" title="排序">${icon('sort')}</button>`;
   frag.appendChild(head);
   const searchInput = head.querySelector('input');
-  searchInput.addEventListener('input', debounce((e) => {
-    nav.search = e.target.value;
+  // IME 组合期间不过滤（见 bindSearch 注释），组合结束再统一过滤一次
+  bindSearch(searchInput, (v) => {
+    nav.search = v;
     searchFocus = true;
     const cl = head.querySelector('.clear');
     if (cl) cl.hidden = !nav.search;
     refreshList();
-  }, 160));
+  });
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && nav.search) {
       searchFocus = false; nav.search = ''; searchInput.value = ''; refreshList();
@@ -342,12 +366,6 @@ function renderSongs() {
   const chunk = makeChunkList(listEl, renderTrackRow);
   chunk.reset(list);
   bindListEvents(listEl);
-
-  // 重渲染后把光标还给搜索框
-  if (searchFocus && document.activeElement !== searchInput) {
-    searchInput.focus();
-    try { searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length); } catch { /* 某些输入类型不支持 */ }
-  }
 }
 
 function makeChunkList(container, renderRow, size = 60) {
@@ -456,9 +474,11 @@ function bindListEvents(listEl, ctx = {}) {
 }
 
 function refreshList() {
-  if (nav.tab === 'songs' && !nav.detail) renderSongs();
-  else if (nav.detail) renderContent();
-  else renderContent();
+  // 必须走 renderContent()（它会先清空容器）。
+  // 之前在歌曲页直接调 renderSongs()，而 renderSongs 只往容器里 append、不清空，
+  // 结果每敲一个字符就往页面后面追加一整份视图 —— 出现两个搜索框、两份列表。
+  renderContent();
+  restoreSearchFocus();
 }
 
 export function toggleLike(t) {
@@ -526,7 +546,8 @@ function renderAlbums() {
   const head = document.createElement('div');
   head.className = 'view-head';
   head.innerHTML = `<h2>专辑</h2><div class="search-wrap" style="max-width:280px">${icon('search')}<input placeholder="搜索专辑" value="${esc(nav.search)}"></div>`;
-  head.querySelector('input').addEventListener('input', debounce((e) => { nav.search = e.target.value; renderContent(); }, 200));
+  const albumSearch = head.querySelector('input');
+  bindSearch(albumSearch, (v) => { nav.search = v; searchFocus = true; renderContent(); restoreSearchFocus(); });
   frag.appendChild(head);
   if (!scanner.hasSource()) { frag.appendChild(emptySource()); contentEl.appendChild(frag); return; }
 
@@ -601,7 +622,8 @@ function renderArtists() {
   const head = document.createElement('div');
   head.className = 'view-head';
   head.innerHTML = `<h2>歌手</h2><div class="search-wrap" style="max-width:280px">${icon('search')}<input placeholder="搜索歌手" value="${esc(nav.search)}"></div>`;
-  head.querySelector('input').addEventListener('input', debounce((e) => { nav.search = e.target.value; renderContent(); }, 200));
+  const artistSearch = head.querySelector('input');
+  bindSearch(artistSearch, (v) => { nav.search = v; searchFocus = true; renderContent(); restoreSearchFocus(); });
   frag.appendChild(head);
   if (!scanner.hasSource()) { frag.appendChild(emptySource()); contentEl.appendChild(frag); return; }
 
@@ -758,9 +780,8 @@ function renderAnime() {
   head.innerHTML = `<h2>番剧</h2>
     <div class="search-wrap" style="max-width:260px">${icon('search')}<input placeholder="搜索番剧" value="${esc(nav.search)}"></div>
     <button class="btn small" id="btnAddAnime">${icon('plus')}添加</button>`;
-  head.querySelector('input').addEventListener('input', debounce((e) => {
-    nav.search = e.target.value; renderContent();
-  }, 200));
+  const animeSearch = head.querySelector('input');
+  bindSearch(animeSearch, (v) => { nav.search = v; searchFocus = true; renderContent(); restoreSearchFocus(); });
   head.querySelector('#btnAddAnime').addEventListener('click', () => animeForm());
   frag.appendChild(head);
 
