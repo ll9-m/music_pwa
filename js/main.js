@@ -40,32 +40,32 @@ async function boot() {
     setTimeout(() => { if (bar.style.width === `${pct}%`) bar.style.width = '0%'; }, 400);
   });
 
-  // 首屏：直接用本地索引渲染，不等文件系统授权与扫描
+  // 首屏：先恢复文件夹授权状态再渲染，避免先闪「选择文件夹」空状态再跳重连提示
   await db.openDB();
   await views.loadFromDB();
+  const perm = await scanner.restoreSavedRoot();
+  if (scanner.hasSource()) {
+    views.setReconnectNeeded(perm !== 'granted');
+  } else if (perm === 'prompt' || perm === 'denied') {
+    views.setReconnectNeeded(true);
+  }
   views.render();
 
   bindShortcuts();
   bindInstall();
 
-  // 后台：恢复文件夹句柄 → 增量扫描 → 恢复播放状态
+  // 后台：增量扫描 → 恢复播放状态 → 注册 SW
   defer(async () => {
-    let needsRender = false;
-    const perm = await scanner.restoreSavedRoot();
     if (scanner.hasSource()) {
-      // 部分根待授权时挂重连横幅，但已授权的根照常工作
-      views.setReconnectNeeded(perm !== 'granted');
-      needsRender = perm !== 'granted';
       if (perm === 'granted' && prefs().scanAtBoot) {
         const r = await scanner.scan();
-        if (r && !r.blocked && (r.added || r.removed || r.updated)) { await views.loadFromDB(); needsRender = true; }
+        if (r && !r.blocked && (r.added || r.removed || r.updated)) {
+          await views.loadFromDB();
+          views.render();
+        }
       }
       await player.restoreState();
-    } else if (perm === 'prompt' || perm === 'denied') {
-      views.setReconnectNeeded(true);
-      needsRender = true;
     }
-    if (needsRender) views.render();
     defer(() => { registerSW(); bindDebug(); }, 500);
   });
 }
@@ -137,6 +137,11 @@ function bindRadioProvider() {
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+  // 「检查更新」按下后（views.js 置 __updateReady），新 SW 接管页面时自动刷新一次，
+  // 否则即使新版本已激活，用户也一直停在旧代码上
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (window.__updateReady) location.reload();
+  });
   navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW 注册失败', e));
 }
 

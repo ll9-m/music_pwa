@@ -8,7 +8,7 @@ import * as art from './art.js';
 import * as eq from './eq.js';
 import { BANDS } from './eq.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 let tracks = [];
 const byRel = new Map();
@@ -296,12 +296,31 @@ function emptySource() {
   return d;
 }
 
+// 上次授权的文件夹还在、只是权限过期（浏览器重启后 FSA 授权默认会话级有效）：
+// 提供一键重连恢复原句柄，而不是误导性的「重新选择文件夹」
+function reconnectSource() {
+  const n = scanner.pendingRootCount();
+  const d = document.createElement('div');
+  d.className = 'empty card';
+  d.style.cssText = 'padding:48px 24px;margin-top:18px';
+  d.innerHTML = `${icon('folder')}<b>音乐文件夹需要重新授权</b>
+    <p>检测到之前添加的文件夹${n > 1 ? `（共 ${n} 个）` : ''}，媒体库里已索引 ${tracks.length} 首。点击确认一次访问权限即可恢复，<b>无需重新选择文件夹</b>。</p>
+    <button class="btn">${icon('refresh')}一键重新连接</button>`;
+  d.querySelector('button').addEventListener('click', async () => {
+    const ok = await scanner.authorizeSavedHandle();
+    if (ok) { reconnectNeeded = false; await rescanAndRefresh(true); }
+    else if (scanner.pendingRootCount()) toast('已授权一个文件夹，请继续授权剩余的');
+    else toast('未获得授权，可稍后重试');
+  });
+  return d;
+}
+
 // ---------- 歌曲页 ----------
 function renderSongs() {
   const q = norm(nav.search);
   const frag = document.createDocumentFragment();
 
-  if (reconnectNeeded) frag.appendChild(reconnectBanner());
+  if (reconnectNeeded && scanner.hasSource()) frag.appendChild(reconnectBanner());
 
   const head = document.createElement('div');
   head.className = 'view-head';
@@ -340,7 +359,7 @@ function renderSongs() {
 
   if (!scanner.hasSource()) {
     listContext = [];
-    frag.appendChild(emptySource());
+    frag.appendChild(scanner.pendingRootCount() ? reconnectSource() : emptySource());
     contentEl.appendChild(frag);
     return;
   }
@@ -701,7 +720,7 @@ function renderAlbums() {
   const albumSearch = head.querySelector('input');
   bindSearch(albumSearch, (v) => { nav.search = v; searchFocus = true; renderContent(); restoreSearchFocus(); });
   frag.appendChild(head);
-  if (!scanner.hasSource()) { frag.appendChild(emptySource()); contentEl.appendChild(frag); return; }
+  if (!scanner.hasSource()) { frag.appendChild(scanner.pendingRootCount() ? reconnectSource() : emptySource()); contentEl.appendChild(frag); return; }
 
   const albums = albumsOf(tracks.filter(t => !q || norm(t.album).includes(q) || norm(t.artist).includes(q)))
     .sort((a, b) => collator.compare(a.album || '', b.album || ''));
@@ -778,7 +797,7 @@ function renderArtists() {
   const artistSearch = head.querySelector('input');
   bindSearch(artistSearch, (v) => { nav.search = v; searchFocus = true; renderContent(); restoreSearchFocus(); });
   frag.appendChild(head);
-  if (!scanner.hasSource()) { frag.appendChild(emptySource()); contentEl.appendChild(frag); return; }
+  if (!scanner.hasSource()) { frag.appendChild(scanner.pendingRootCount() ? reconnectSource() : emptySource()); contentEl.appendChild(frag); return; }
 
   const map = new Map();
   for (const t of tracks) {
@@ -899,7 +918,7 @@ function renderFolders() {
   head.className = 'view-head';
   head.innerHTML = `<h2>文件夹</h2>`;
   frag.appendChild(head);
-  if (!scanner.hasSource()) { frag.appendChild(emptySource()); contentEl.appendChild(frag); return; }
+  if (!scanner.hasSource()) { frag.appendChild(scanner.pendingRootCount() ? reconnectSource() : emptySource()); contentEl.appendChild(frag); return; }
 
   const { dirs, items } = folderEntries('');
   listContext = items.map(t => t.rel);
@@ -1240,7 +1259,7 @@ function renderSettings() {
     <div class="card set-group">
       <div class="set-row"><div class="lab"><b>存储占用</b><span id="storageInfo">计算中…</span></div></div>
       <div class="set-row" id="rowInstall" hidden><div class="lab"><b>安装应用</b><span>像原生应用一样从桌面 / 主屏启动</span></div><button class="btn small" id="btnInstall">${icon('download')}安装</button></div>
-      <div class="set-row"><div class="lab"><b>检查更新</b><span>应用缓存版本 ${APP_VERSION}</span></div><button class="btn ghost small" id="btnUpdate">${icon('refresh')}检查</button></div>
+      <div class="set-row"><div class="lab"><b>检查更新</b><span>发现新版本后自动下载并刷新页面</span></div><button class="btn ghost small" id="btnUpdate">${icon('refresh')}检查</button></div>
       <div class="set-row"><div class="lab"><b>导出备份</b><span>播放列表、喜欢与播放统计保存为 JSON 文件</span></div><button class="btn ghost small" id="btnExport">${icon('download')}导出</button></div>
       <div class="set-row"><div class="lab"><b>恢复备份</b><span>从备份 JSON 合并恢复（不删除现有数据）</span></div><button class="btn ghost small" id="btnImport">${icon('upload')}导入</button></div>
       <div class="set-row"><div class="lab"><b>清除播放统计</b><span>重置播放次数与最近播放</span></div><button class="btn ghost small" id="btnClearStats">清除</button></div>
@@ -1265,7 +1284,8 @@ function renderSettings() {
 
     <h2>关于</h2>
     <div class="card set-group">
-      <div class="set-row"><div class="lab"><b>本地音乐播放器</b><span>版本 ${APP_VERSION} · 纯离线 PWA</span></div></div>
+      <div class="set-row"><div class="lab"><b>本地音乐播放器</b><span>版本 ${APP_VERSION} · 纯离线 PWA · 所有数据仅存本机</span></div></div>
+      <div class="set-row"><div class="lab"><span>功能：多文件夹媒体库 / 文件夹视图 / 播放列表与多选 / 统计与听歌成就 / 5 段均衡器与频谱 / 歌词（LRC · KRC）/ 队列自动接歌 / 备份导出导入 / 系统级打开音频文件。</span></div></div>
       <div class="set-row"><div class="lab"><span>所有音乐、封面、播放列表都保存在你的浏览器本地，<b>不发起任何网络请求</b>（除加载本应用自身页面外）。支持的格式：MP3 / FLAC / M4A / AAC / OGG / Opus / WAV / WebM。</span></div></div>
     </div>
   `;
@@ -1382,11 +1402,22 @@ function renderSettings() {
   });
   // 数据
   wrap.querySelector('#btnUpdate').addEventListener('click', async () => {
-    if ('serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.getRegistration();
-      if (reg) { await reg.update(); toast('已检查，如有更新将自动应用'); }
-      else toast('Service Worker 未注册');
-    }
+    if (!('serviceWorker' in navigator)) { toast('当前环境不支持 Service Worker'); return; }
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) { toast('Service Worker 未注册（首次访问稍后再试）'); return; }
+    let found = false;
+    const onUpdateFound = () => { found = true; };
+    reg.addEventListener('updatefound', onUpdateFound);
+    // 新 SW 接管页面时 main.js 会自动刷新（给下载/安装留 20s 窗口）
+    window.__updateReady = true;
+    setTimeout(() => { window.__updateReady = false; }, 20000);
+    toast('正在检查更新…');
+    try { await reg.update(); } catch { /* 网络失败保持现状 */ }
+    setTimeout(() => {
+      reg.removeEventListener('updatefound', onUpdateFound);
+      if (!found) toast('已是最新版本');
+      else toast('发现新版本，正在下载，完成后自动刷新');
+    }, 800);
   });
   wrap.querySelector('#btnClearStats').addEventListener('click', async () => {
     if (!(await confirmDialog('清除播放统计', '将重置所有歌曲的播放次数与最近播放时间。', '清除'))) return;
