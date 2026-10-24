@@ -860,3 +860,23 @@ input[type="range"].seek { height: 4px; }
 .ach-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .ach { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text3); background: var(--card); white-space: nowrap; }
 .ach.on { color: #fff; background: var(--accent); border-color: transparent; font-weight: 600; }
+
+/* ---------- 多选模式 ---------- */
+body.selecting .trow .t-act { display: none; }
+.sel-check {
+  display: grid; place-items: center;
+  width: 20px; height: 20px; margin: 0 auto;
+  border-radius: 50%; border: 2px solid var(--border);
+  color: transparent; transition: background .12s, border-color .12s, color .12s;
+}
+.trow.selected .sel-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.trow.selectable .t-idx svg { display: block; width: 13px; height: 13px; }
+.sel-bar {
+  position: fixed; z-index: 100; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--playbar-h, 76px) + 12px);
+  display: flex; align-items: center; gap: 8px;
+  max-width: calc(100vw - 24px); overflow-x: auto;
+  padding: 8px 12px; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.sel-bar b { font-size: 13px; white-space: nowrap; margin: 0 4px 0 2px; }

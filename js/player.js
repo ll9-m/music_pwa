@@ -326,23 +326,28 @@ export function toggleMute() {
 }
 
 // ---------- 队列操作 ----------
+// rel 可传单个字符串或数组（多选批量加入）
 export function playNextInQueue(rel) {
-  if (state.pos < 0) { state.queue.unshift(rel); state.baseQueue.unshift(rel); state.pos = -1; }
+  const rels = Array.isArray(rel) ? rel : [rel];
+  if (state.pos < 0) { state.queue.unshift(...rels); state.baseQueue.unshift(...rels); state.pos = -1; }
   else {
-    state.queue.splice(state.pos + 1, 0, rel);
-    if (!state.baseQueue.includes(rel)) {
-      const bi = state.baseQueue.indexOf(state.queue[state.pos]);
-      state.baseQueue.splice(bi + 1, 0, rel);
+    state.queue.splice(state.pos + 1, 0, ...rels);
+    let bi = state.baseQueue.indexOf(state.queue[state.pos]);
+    for (const r of rels) {
+      if (!state.baseQueue.includes(r)) { state.baseQueue.splice(bi + 1, 0, r); bi++; }
     }
   }
   emit('queue');
-  toast('将在下一首播放');
+  toast(rels.length > 1 ? `将在下一首播放 ${rels.length} 首` : '将在下一首播放');
 }
 export function addToQueueEnd(rel) {
-  state.queue.push(rel);
-  if (!state.baseQueue.includes(rel)) state.baseQueue.push(rel);
+  const rels = Array.isArray(rel) ? rel : [rel];
+  for (const r of rels) {
+    state.queue.push(r);
+    if (!state.baseQueue.includes(r)) state.baseQueue.push(r);
+  }
   emit('queue');
-  toast('已加入播放队列');
+  toast(rels.length > 1 ? `已加入 ${rels.length} 首到播放队列` : '已加入播放队列');
 }
 export function removeFromQueue(pos) {
   if (pos === state.pos || pos < 0 || pos >= state.queue.length) return;

@@ -178,7 +178,8 @@ function bindShortcuts() {
       }
       case 'Escape':
         closeMenu();
-        if (np.isQueueOpen()) np.toggleQueue(false);
+        if (views.isSelecting()) views.exitSelect();
+        else if (np.isQueueOpen()) np.toggleQueue(false);
         else if (np.isNPOpen()) np.closeNP();
         break;
     }

@@ -17,6 +17,8 @@ let playlists = [];
 export const nav = { tab: 'songs', detail: null, search: '' };
 let deferredPrompt = null;
 let reconnectNeeded = false;
+// 上一次渲染的导航位置签名（多选状态随导航切换自动重置）
+let lastNavSig = '';
 
 export const trackByRel = (rel) => byRel.get(rel);
 export const allTracks = () => tracks;
@@ -153,6 +155,10 @@ let listContext = [];
 let chunkHandles = [];
 // 搜索框在重渲染后需要恢复焦点
 let searchFocus = false;
+// ---------- 多选模式 ----------
+let selMode = false;
+const selSet = new Set();   // 已选 rel
+let selCtx = {};            // 当前列表上下文（播放列表详情里有 playlistId）
 
 const TABS = [
   ['songs', '歌曲', 'music'],
@@ -230,6 +236,15 @@ function renderContent() {
   // 释放上一视图仍被 IO 观察的占位节点（IO 对其持强引用，不清会泄漏）
   for (const n of observedPh) artIO.unobserve(n);
   observedPh.clear();
+  // 导航位置变化时重置多选（进入多选本身的重渲染签名不变，不受影响）
+  const navSig = `${nav.tab}|${nav.detail ? `${nav.detail.type}:${nav.detail.key ?? ''}` : ''}`;
+  if (navSig !== lastNavSig) {
+    selMode = false;
+    selSet.clear();
+    document.body.classList.remove('selecting');
+    removeSelBar();
+    lastNavSig = navSig;
+  }
   contentEl = rootEl;
   contentEl.innerHTML = '';
   if (nav.detail) {
@@ -243,14 +258,16 @@ function renderContent() {
   // 同步部分照跑、switch 被推到微任务，表现为「页面空白且无报错」，
   // 极难定位。异步数据必须在渲染前 await 完，不该渗进渲染函数。
   switch (nav.tab) {
-    case 'songs': return renderSongs();
-    case 'albums': return renderAlbums();
-    case 'artists': return renderArtists();
-    case 'folders': return renderFolders();
-    case 'playlists': return renderPlaylists();
-    case 'stats': return renderStats();
-    case 'settings': return renderSettings();
+    case 'songs': renderSongs(); break;
+    case 'albums': renderAlbums(); break;
+    case 'artists': renderArtists(); break;
+    case 'folders': renderFolders(); break;
+    case 'playlists': renderPlaylists(); break;
+    case 'stats': renderStats(); break;
+    case 'settings': renderSettings(); break;
   }
+  // 多选模式下重渲染（搜索过滤、批量删除后）要同步底部操作条
+  if (selMode) updateSelBar();
 }
 
 function reconnectBanner() {
@@ -412,6 +429,12 @@ function renderTrackRow(t, i) {
   if (t.liked) row.querySelector('.t-like svg').style.fill = 'currentColor';
   row.insertBefore(phNode(t.albumKey, t.rel, extOf(t.name), 'thumb'), row.querySelector('.t-main'));
   if (player.currentRel() === t.rel) markRowPlaying(row);
+  if (selMode) {
+    row.classList.add('selectable');
+    if (selSet.has(t.rel)) row.classList.add('selected');
+    const idx = row.querySelector('.t-idx');
+    idx.innerHTML = `<span class="sel-check">${selSet.has(t.rel) ? icon('check') : ''}</span>`;
+  }
   return row;
 }
 
@@ -439,12 +462,14 @@ export function updatePlayingRows() {
 }
 
 function bindListEvents(listEl, ctx = {}) {
+  selCtx = ctx;
   listEl.addEventListener('click', (e) => {
     const row = e.target.closest('.trow');
     if (!row) return;
     const rel = row.dataset.rel;
     const t = byRel.get(rel);
     if (!t) return;
+    if (selMode) { toggleSel(rel, row); return; }
     if (e.target.closest('.t-more')) {
       const r = e.target.closest('.t-more').getBoundingClientRect();
       showMenu(trackMenu(t, ctx), r.left, r.bottom + 4);
@@ -457,12 +482,36 @@ function bindListEvents(listEl, ctx = {}) {
     player.playRels(rows, rel);
   });
   listEl.addEventListener('contextmenu', (e) => {
+    if (selMode) { e.preventDefault(); return; }
     const row = e.target.closest('.trow');
     if (!row) return;
     e.preventDefault();
     const t = byRel.get(row.dataset.rel);
     if (t) showMenu(trackMenu(t, ctx), e.clientX, e.clientY);
   });
+  // 长按进入多选（移动端没有右键）
+  let pressTimer = 0, pressStart = null;
+  listEl.addEventListener('pointerdown', (e) => {
+    if (selMode || e.target.closest('button')) return;
+    const row = e.target.closest('.trow');
+    if (!row || !byRel.get(row.dataset.rel)) return;
+    pressStart = { x: e.clientX, y: e.clientY };
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      pressTimer = 0;
+      try { navigator.vibrate && navigator.vibrate(15); } catch { }
+      enterSelect(row.dataset.rel);
+    }, 480);
+  });
+  const cancelPress = (e) => {
+    clearTimeout(pressTimer);
+    pressTimer = 0;
+    if (pressStart && e && (Math.abs(e.clientX - pressStart.x) > 10 || Math.abs(e.clientY - pressStart.y) > 10)) pressStart = null;
+  };
+  listEl.addEventListener('pointermove', cancelPress);
+  listEl.addEventListener('pointerup', () => { clearTimeout(pressTimer); pressTimer = 0; });
+  listEl.addEventListener('pointercancel', () => { clearTimeout(pressTimer); pressTimer = 0; });
+  listEl.addEventListener('scroll', () => { clearTimeout(pressTimer); }, { passive: true });
 }
 
 function refreshList() {
@@ -486,6 +535,116 @@ export function toggleLike(t) {
   if (nav.tab === 'playlists' && !nav.detail) renderContent();
 }
 
+// ---------- 多选模式 ----------
+export const isSelecting = () => selMode;
+
+/** 进入多选（firstRel 为初始选中项）；退出后恢复普通列表 */
+function enterSelect(firstRel) {
+  selMode = true;
+  selSet.clear();
+  if (firstRel) selSet.add(firstRel);
+  document.body.classList.add('selecting');
+  renderContent();
+  updateSelBar();
+}
+
+/** 退出多选并恢复渲染 */
+export function exitSelect() {
+  selMode = false;
+  selSet.clear();
+  document.body.classList.remove('selecting');
+  removeSelBar();
+  renderContent();
+}
+
+function toggleSel(rel, row) {
+  if (selSet.has(rel)) selSet.delete(rel); else selSet.add(rel);
+  if (row) {
+    row.classList.toggle('selected', selSet.has(rel));
+    const idx = row.querySelector('.t-idx');
+    if (idx) idx.innerHTML = `<span class="sel-check">${selSet.has(rel) ? icon('check') : ''}</span>`;
+  }
+  updateSelBar();
+}
+
+function removeSelBar() {
+  document.getElementById('selBar')?.remove();
+}
+
+function updateSelBar() {
+  if (!selMode) { removeSelBar(); return; }
+  let bar = document.getElementById('selBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'selBar';
+    bar.className = 'sel-bar';
+    document.body.appendChild(bar);
+  }
+  const n = selSet.size;
+  const dis = n ? '' : 'disabled style="opacity:.5"';
+  bar.innerHTML = `
+    <button class="icon-btn small" id="selClose" aria-label="退出多选" title="退出多选">${icon('x')}</button>
+    <b>已选 ${n} 首</b>
+    <button class="btn ghost small" id="selAll" ${listContext.length ? '' : 'disabled style="opacity:.5"'}>全选</button>
+    <button class="btn ghost small" id="selPlayNext" ${dis}>下一首播放</button>
+    <button class="btn ghost small" id="selQueueAdd" ${dis}>加入队列</button>
+    ${selCtx.playlistId ? `<button class="btn ghost-danger small" id="selRemove" ${dis}>从列表移除</button>` : ''}
+    <button class="btn small" id="selToPl" ${dis}>添加到播放列表</button>`;
+
+  bar.querySelector('#selClose').addEventListener('click', exitSelect);
+  bar.querySelector('#selAll').addEventListener('click', () => {
+    for (const r of listContext) selSet.add(r);
+    document.querySelectorAll('.trow.selectable').forEach(row => {
+      row.classList.add('selected');
+      const idx = row.querySelector('.t-idx');
+      if (idx) idx.innerHTML = `<span class="sel-check">${icon('check')}</span>`;
+    });
+    updateSelBar();
+  });
+  bar.querySelector('#selPlayNext').addEventListener('click', () => { if (n) { player.playNextInQueue([...selSet]); exitSelect(); } });
+  bar.querySelector('#selQueueAdd').addEventListener('click', () => { if (n) { player.addToQueueEnd([...selSet]); exitSelect(); } });
+  bar.querySelector('#selToPl').addEventListener('click', (e) => {
+    if (!n) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const items = [
+      ...playlists.map(p => ({ label: p.name, icon: 'playlist', onClick: () => addToPlaylistMany(p, [...selSet]) })),
+      '-',
+      {
+        label: '新建播放列表…', icon: 'plus',
+        onClick: async () => {
+          const name = await promptDialog('新建播放列表', '播放列表名称');
+          if (!name) return;
+          const p = { id: crypto.randomUUID(), name, rels: [...selSet], created: Date.now() };
+          await db.putPlaylist(p);
+          await loadPlaylists();
+          toast(`已创建并加入 ${selSet.size} 首`);
+          exitSelect();
+        },
+      },
+    ];
+    showMenu(items, r.left, r.bottom + 6);
+  });
+  if (selCtx.playlistId) {
+    bar.querySelector('#selRemove').addEventListener('click', async () => {
+      const p = playlists.find(x => x.id === selCtx.playlistId);
+      if (!p) return;
+      const before = p.rels.length;
+      p.rels = p.rels.filter(r => !selSet.has(r));
+      await db.putPlaylist(p);
+      toast(`已移除 ${before - p.rels.length} 首`);
+      exitSelect();
+    });
+  }
+}
+
+async function addToPlaylistMany(p, rels) {
+  const fresh = rels.filter(r => !p.rels.includes(r));
+  if (!fresh.length) { toast(`「${p.name}」中已有所选歌曲`); return; }
+  p.rels.push(...fresh);
+  await db.putPlaylist(p);
+  toast(`已把 ${fresh.length} 首加入「${p.name}」`);
+}
+
 // ---------- 曲目菜单 ----------
 function trackMenu(t, ctx) {
   const items = [];
@@ -494,6 +653,7 @@ function trackMenu(t, ctx) {
     onClick: () => addToPlaylist(p, t.rel),
   }));
   items.push(
+    { label: '多选', icon: 'check', onClick: () => enterSelect(t.rel) },
     { label: '播放', icon: 'play', onClick: () => player.playRels([t.rel], t.rel) },
     { label: '下一首播放', icon: 'playNext', onClick: () => player.playNextInQueue(t.rel) },
     { label: '加入队列', icon: 'queueAdd', onClick: () => player.addToQueueEnd(t.rel) },
