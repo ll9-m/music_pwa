@@ -567,6 +567,8 @@ select.input:focus, input.input:focus { border-color: var(--accent); }
   position: fixed; inset: 0; z-index: 90;
   transform: translateY(101%); visibility: hidden;
   transition: transform .34s cubic-bezier(.32,.72,.25,1), visibility 0s .34s;
+  /* 封面/频谱统一宽度：除宽度约束外再受视口高度约束，矮窗口下控件不被裁掉 */
+  --np-art: min(64vw, 400px, max(220px, calc(100dvh - 430px)));
 }
 #np.open { transform: translateY(0); visibility: visible; transition: transform .34s cubic-bezier(.32,.72,.25,1); }
 .np-bg { position: absolute; inset: 0; background: var(--bg); transition: background-color .25s; }
@@ -584,54 +586,62 @@ html[data-theme="glass"] .np-bg::before { opacity: .3; }
   max-width: 1320px; margin: 0 auto;
   padding: 0 clamp(18px, 3vw, 40px) calc(env(safe-area-inset-bottom, 0px) + 20px);
 }
-.np-top { display: flex; align-items: center; padding: calc(env(safe-area-inset-top, 0px) + 12px) 0 6px; }
+/* 顶栏收起为悬浮层：不占布局行，封面直达屏幕上方；按钮加圆形底色保证在封面/氛围色上可读 */
+.np-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 6;
+  display: flex; align-items: center; gap: 6px;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) clamp(18px, 3vw, 40px) 10px;
+  pointer-events: none;
+}
+.np-top .icon-btn { pointer-events: auto; background: var(--card); box-shadow: var(--shadow-sm); }
 .np-top .cap { flex: 1; text-align: center; font-size: 11px; letter-spacing: .16em; color: var(--text3); font-weight: 700; text-transform: uppercase; }
 
 .np-body {
   flex: 1; display: grid; align-items: center; gap: clamp(20px, 4vw, 56px);
   grid-template-columns: minmax(0, 1fr);
-  min-height: 0; padding: 8px 0;
+  min-height: 0; padding: calc(env(safe-area-inset-top, 0px) + 58px) 0 0;
 }
-.np-left { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; width: 100%; max-width: 460px; margin: 0 auto; }
-.np-art-wrap { position: relative; width: min(62vw, 360px); aspect-ratio: 1; }
+.np-left { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; width: 100%; max-width: 500px; margin: 0 auto; }
+.np-art-wrap { position: relative; width: var(--np-art); aspect-ratio: 1; }
 #npArtGlow {
   position: absolute; inset: -7%; border-radius: 26px; filter: blur(36px); opacity: .48;
   background: var(--np-tint, var(--accent-weak)); transition: background .6s;
 }
 #npArt {
-  position: relative; width: 100%; height: 100%; border-radius: 14px; object-fit: cover;
+  position: relative; width: 100%; height: 100%; border-radius: 18px; object-fit: cover;
   box-shadow: var(--shadow); background: var(--accent-weak);
 }
 #npArtPh {
-  position: absolute; inset: 0; border-radius: 14px; display: grid; place-items: center; color: #fff;
+  position: absolute; inset: 0; border-radius: 18px; display: grid; place-items: center; color: #fff;
 }
 #npArtPh svg { width: 60px; height: 60px; opacity: .8; }
-#viz { width: min(62vw, 360px); height: 40px; margin-top: 10px; opacity: .85; }
+#viz { width: var(--np-art); height: 44px; margin-top: 12px; opacity: .85; }
 
 .np-title {
-  margin-top: 16px; font-size: clamp(19px, 2.4vw, 25px); font-weight: 700; letter-spacing: -.02em;
-  text-align: center; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 20px; font-size: clamp(19px, 2.4vw, 25px); font-weight: 700; letter-spacing: -.02em;
+  text-align: center; width: 100%; word-break: break-word;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
 .np-artist { font-size: 14px; color: var(--text2); text-align: center; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-album { font-size: 12.5px; color: var(--text3); text-align: center; }
 
-.np-seek { display: flex; align-items: center; gap: 10px; width: min(76vw, 420px); margin: 14px auto 0; max-width: 100%; }
+.np-seek { display: flex; align-items: center; gap: 10px; width: min(80vw, 460px); margin: 16px auto 0; max-width: 100%; }
 .np-seek time { font-size: 11.5px; color: var(--text3); font-variant-numeric: tabular-nums; flex: none; min-width: 38px; }
 .np-seek time:last-child { text-align: right; }
-.np-controls { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 10px auto 0; width: min(76vw, 420px); }
+.np-controls { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 12px auto 0; width: min(80vw, 460px); }
 .np-controls .icon-btn svg { width: 22px; height: 22px; }
 .np-controls .play-btn {
-  width: 54px; height: 54px; border-radius: 999px;
+  width: 58px; height: 58px; border-radius: 999px;
   background: var(--ink); color: var(--on-ink);
 }
-.np-controls .play-btn svg { width: 22px; height: 22px; }
+.np-controls .play-btn svg { width: 24px; height: 24px; }
 .np-controls .c-repeat { position: relative; }
 .np-controls .repeat-badge {
   position: absolute; top: 1px; right: 1px; font-size: 8.5px; font-weight: 800;
   background: var(--accent); color: var(--on-accent); border-radius: 999px;
   width: 13px; height: 13px; display: grid; place-items: center;
 }
-.np-extra { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 12px auto 0; width: min(76vw, 420px); }
+.np-extra { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 14px auto 0; width: min(80vw, 460px); }
 .np-extra .vol { display: flex; align-items: center; gap: 6px; flex: 1; max-width: 170px; }
 
 /* 歌词面板 */
@@ -662,9 +672,9 @@ html[data-theme="glass"] .np-bg::before { opacity: .3; }
 /* 宽屏：封面 / 歌词 双栏 */
 @media (min-width: 901px) {
   #np.lyrics-on .np-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  #np.lyrics-on .np-left { max-width: 420px; }
-  #np.lyrics-on .np-art-wrap { width: min(26vw, 300px); }
-  #np.lyrics-on .np-lyrics { display: block; height: min(66dvh, 560px); }
+  #np.lyrics-on .np-left { max-width: 460px; }
+  #np.lyrics-on .np-art-wrap { width: min(26vw, 320px); }
+  #np.lyrics-on .np-lyrics { display: block; height: min(62dvh, 560px); }
 }
 
 /* ---------------- 队列面板 ---------------- */
