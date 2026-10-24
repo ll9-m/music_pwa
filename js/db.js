@@ -57,9 +57,11 @@ export const getPlaylists = () => tx('playlists', 'readonly', s => wrap(s.getAll
 export const putPlaylist = (p) => tx('playlists', 'readwrite', s => s.put(p));
 export const deletePlaylist = (id) => tx('playlists', 'readwrite', s => s.delete(id));
 
-// ---- handles (文件夹句柄持久化) ----
+// ---- handles (文件夹句柄持久化，支持多文件夹) ----
 export const getHandle = (key) => tx('handles', 'readonly', s => wrap(s.get(key)));
+export const getAllHandles = () => tx('handles', 'readonly', s => wrap(s.getAll()));
 export const putHandle = (key, handle) => tx('handles', 'readwrite', s => s.put({ key, handle }));
+export const deleteHandle = (key) => tx('handles', 'readwrite', s => s.delete(key));
 
 // ---- kv (播放状态等) ----
 export const kvGet = (k) => tx('kv', 'readonly', s => wrap(s.get(k)).then(r => r ? r.v : undefined));

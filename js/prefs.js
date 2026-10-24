@@ -13,6 +13,8 @@ export const DEFAULTS = {
   muted: false,
   restoreOn: true,
   scanAtBoot: true,
+  scanOnFocus: true,     // 切回标签页时自动增量扫描
+  autoDJ: false,         // 队列播完自动接歌
   shuffleOn: false,
 };
 

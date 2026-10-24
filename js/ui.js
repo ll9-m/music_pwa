@@ -67,6 +67,10 @@ const P = {
   moon: '<path d="M20 13.5A8.5 8.5 0 0 1 10.5 4 8.5 8.5 0 1 0 20 13.5z"/>',
   info: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16.5"/><circle cx="12" cy="7.8" r="1.1" fill="currentColor" stroke="none"/>',
   playNext: '<path d="M4 5l8 5-8 5z" fill="currentColor" stroke="none"/><line x1="16" y1="5" x2="16" y2="15"/><line x1="4" y1="19.5" x2="20" y2="19.5"/>',
+  chart: '<line x1="4" y1="20" x2="20" y2="20"/><rect x="5.5" y="12" width="3.4" height="8" rx="1"/><rect x="10.3" y="7" width="3.4" height="13" rx="1"/><rect x="15.1" y="10" width="3.4" height="10" rx="1"/>',
+  upload: '<path d="M12 16V5"/><polyline points="7 9.5 12 4.5 17 9.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  infinity: '<path d="M6.9 15.9c-2.1 0-3.9-1.7-3.9-3.9s1.8-3.9 3.9-3.9c3.4 0 6.8 7.8 10.2 7.8 2.1 0 3.9-1.7 3.9-3.9s-1.8-3.9-3.9-3.9c-3.4 0-6.8 7.8-10.2 7.8z"/>',
+  trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 5H5a3 3 0 0 0 3 4.5"/><path d="M16 5h3a3 3 0 0 1-3 4.5"/><path d="M12 13v3"/><path d="M9 20h6"/><path d="M10 20c0-2 .7-4 2-4s2 2 2 4"/>',
 };
 
 export function icon(name, cls) {

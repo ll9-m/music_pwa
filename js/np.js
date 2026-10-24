@@ -179,6 +179,7 @@ function updatePlaybar() {
         if (r && slot.contains(ph)) {
           const img = document.createElement('img');
           img.className = 'thumb';
+          img.dataset.key = t.albumKey;
           img.src = r.url;
           img.alt = '';
           ph.replaceWith(img);
@@ -482,6 +483,7 @@ function buildQueue() {
   q.innerHTML = `
     <div class="q-head">
       <b>播放队列 <span id="qCount"></span></b>
+      <button class="icon-btn small q-dj ${prefs().autoDJ ? 'active' : ''}" aria-label="播完自动接歌" title="播完自动接歌">${icon('infinity')}</button>
       <button class="icon-btn small q-clear" aria-label="清空待播" title="清空待播">${icon('trash')}</button>
       <button class="icon-btn small q-close" aria-label="关闭">${icon('x')}</button>
     </div>
@@ -490,6 +492,12 @@ function buildQueue() {
   els.queue = q;
   q.querySelector('.q-close').addEventListener('click', () => toggleQueue(false));
   q.querySelector('.q-clear').addEventListener('click', () => { player.clearUpcoming(); toast('已清空待播'); });
+  q.querySelector('.q-dj').addEventListener('click', (e) => {
+    const on = !prefs().autoDJ;
+    setPref('autoDJ', on);
+    e.currentTarget.classList.toggle('active', on);
+    toast(on ? '队列播完自动接歌：开' : '队列播完自动接歌：关');
+  });
 }
 
 // 只渲染当前位置附近的窗口，避免长队列（随机播放全部）把内存与 DOM 撑爆

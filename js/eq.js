@@ -81,12 +81,12 @@ export function drawSpectrum(canvas, accent) {
   const data = freqBuf;
   an.getByteFrequencyData(data);
   const bw = canvas.width / n;
+  g.fillStyle = accent;
   for (let i = 0; i < n; i++) {
     // 对数取样，低频占比过高时更均衡
     const idx = Math.floor(Math.pow(i / n, 1.6) * data.length * 0.9);
     const v = data[idx] / 255;
     const bh = Math.max(2 * dpr, v * canvas.height * 0.92);
-    g.fillStyle = accent;
     g.globalAlpha = 0.35 + v * 0.65;
     const x = i * bw + bw * 0.18;
     const bwi = bw * 0.64;

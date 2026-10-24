@@ -82,8 +82,9 @@ export async function getArt(albumKey, rel, ext) {
 }
 
 async function makeThumb(pic) {
+  let bmp;
   try {
-    const bmp = await createImageBitmap(pic.blob || pic);
+    bmp = await createImageBitmap(pic.blob || pic);
     const max = 256;
     const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
     const w = Math.max(1, Math.round(bmp.width * scale));
@@ -91,10 +92,11 @@ async function makeThumb(pic) {
     const canvas = new OffscreenCanvas(w, h);
     canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
     const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.82 });
-    bmp.close();
     return blob.type === 'image/webp' ? blob : null;
   } catch {
     return null;
+  } finally {
+    bmp?.close(); // 失败路径也要释放，位图不 close 会驻留 GPU/堆内存
   }
 }
 

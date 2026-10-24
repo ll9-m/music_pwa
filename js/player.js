@@ -34,6 +34,8 @@ const state = {
   counted: false,
   pendingSeek: undefined,
   saveTimer: null,
+  listenMs: 0,         // 累计听歌时长（成就卡用）
+  lastListenTick: 0,
 };
 
 export function init(audioEl, trackResolver, eqHook) {
@@ -82,11 +84,34 @@ export function init(audioEl, trackResolver, eqHook) {
         putTrack({ ...state.currentTrack });
         emit('trackmeta');
       }
+      // 听歌时长：只在播放中按真实时间累积，单次增量钳到 10s（防止暂停后恢复把间隙算进去）
+      const dt = state.lastListenTick ? now - state.lastListenTick : 0;
+      if (state.playing && dt > 0 && dt < 10000) state.listenMs += dt;
+      state.lastListenTick = now;
+      if (state.listenMs >= (state.lastListenSave || 0) + 10000) {
+        state.lastListenSave = state.listenMs;
+        kvSet('listenMs', Math.round(state.listenMs)).catch(() => { });
+      }
       scheduleSave();
     }
   });
 
   setupMediaSession();
+
+  // 播放中 timeupdate 会不断重置 800ms 保存定时器，持续播放期间进度不会落盘；
+  // 页面隐藏/关闭时显式保存一次，避免直接关页丢进度
+  const saveNow = () => {
+    clearTimeout(state.saveTimer);
+    saveState();
+    kvSet('listenMs', Math.round(state.listenMs)).catch(() => { });
+  };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
+  addEventListener('pagehide', saveNow);
+
+  // 听歌时长是跨会话累计值，异步恢复（不阻塞启动）
+  kvGet('listenMs').then(v => {
+    if (typeof v === 'number' && v > state.listenMs) state.listenMs = v;
+  }).catch(() => { });
 }
 
 // ---------- 时间推进（rAF 驱动 UI；页面隐藏时由 timeupdate 兜底） ----------
@@ -223,11 +248,27 @@ export function cycleRepeat() {
   return state.repeat;
 }
 
+// Auto-DJ：队列播完且不循环时，由 provider（main.js 接线）返回一批相似曲目自动续上
+let radioProvider = null;
+export function setRadioProvider(fn) { radioProvider = fn; }
+
 export async function next(auto = false) {
   if (!state.queue.length) return;
   if (state.pos < state.queue.length - 1) state.pos++;
   else if (state.repeat === 'all' || !auto) state.pos = 0;
-  else { // 结尾停止
+  else if (prefs().autoDJ && radioProvider) {
+    const rels = radioProvider(state.queue[state.pos]) || [];
+    if (rels.length) {
+      state.queue.push(...rels);
+      for (const r of rels) if (!state.baseQueue.includes(r)) state.baseQueue.push(r);
+      state.pos++;
+      emit('queue');
+    } else {
+      state.playing = false;
+      emit('state');
+      return;
+    }
+  } else { // 结尾停止
     state.playing = false;
     emit('state');
     return;
@@ -336,6 +377,15 @@ export const currentTime = () => (audio ? audio.currentTime : 0);
 export const duration = () => (audio && isFinite(audio.duration) ? audio.duration : (state.currentTrack?.duration || 0));
 export const repeatMode = () => state.repeat;
 export const getAudio = () => audio;
+export const getListenMs = () => Math.round(state.listenMs);
+/** 备份合并：取较大值，防止旧备份把累计时长拉回去 */
+export function mergeListenMs(ms) {
+  if (typeof ms === 'number' && ms > state.listenMs) {
+    state.listenMs = ms;
+    kvSet('listenMs', Math.round(ms)).catch(() => { });
+  }
+  return getListenMs();
+}
 
 // ---------- 持久化 ----------
 function scheduleSave() {
@@ -350,6 +400,7 @@ function saveState() {
     time: audio ? audio.currentTime || 0 : 0,
     repeat: state.repeat,
   }).catch(() => { });
+  kvSet('listenMs', Math.round(state.listenMs)).catch(() => { });
 }
 export async function restoreState() {
   try {

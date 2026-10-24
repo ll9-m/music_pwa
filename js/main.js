@@ -22,11 +22,14 @@ async function boot() {
   loadPrefs();
   applyTheme(prefs().theme);
 
+  bindFileHandling();
   views.init();
   np.init();
 
   player.init(audio, views.trackByRel, () => eq.ensureGraph(audio));
   audio.addEventListener('play', () => eq.resumeCtx());
+  bindFocusScan();
+  bindRadioProvider();
 
   scanner.onProgress(({ phase, done, total }) => {
     const bar = document.querySelector('#scanProgress .bar');
@@ -49,12 +52,14 @@ async function boot() {
   defer(async () => {
     let needsRender = false;
     const perm = await scanner.restoreSavedRoot();
-    if (perm === 'granted') {
-      if (prefs().scanAtBoot) {
+    if (scanner.hasSource()) {
+      // 部分根待授权时挂重连横幅，但已授权的根照常工作
+      views.setReconnectNeeded(perm !== 'granted');
+      needsRender = perm !== 'granted';
+      if (perm === 'granted' && prefs().scanAtBoot) {
         const r = await scanner.scan();
-        if (r && (r.added || r.removed)) { await views.loadFromDB(); needsRender = true; }
+        if (r && !r.blocked && (r.added || r.removed || r.updated)) { await views.loadFromDB(); needsRender = true; }
       }
-      views.setReconnectNeeded(false);
       await player.restoreState();
     } else if (perm === 'prompt' || perm === 'denied') {
       views.setReconnectNeeded(true);
@@ -62,6 +67,69 @@ async function boot() {
     }
     if (needsRender) views.render();
     defer(() => { registerSW(); bindDebug(); }, 500);
+  });
+}
+
+// ---------- 系统级打开方式（PWA File Handling） ----------
+function bindFileHandling() {
+  if (!('launchQueue' in window)) return;
+  launchQueue.setConsumer(async (params) => {
+    if (!params.files || !params.files.length) return;
+    try {
+      const files = [];
+      for (const fh of params.files) { try { files.push(await fh.getFile()); } catch { /* 跳过不可读项 */ } }
+      if (!files.length) return;
+      scanner.setFiles(files);
+      await scanner.scan();
+      await views.loadFromDB();
+      views.setReconnectNeeded(false);
+      views.render();
+      const rels = files.map(f => f.name);
+      await player.playRels(rels, rels[0]);
+    } catch (e) {
+      console.warn('处理系统打开的文件失败', e);
+    }
+  });
+}
+
+// ---------- 切回标签页自动增量扫描 ----------
+// FSA 拿不到文件系统监听，以前台可见性为准：切回来时若距上次扫描超过 60s 就扫一次
+let lastFocusScan = 0;
+function bindFocusScan() {
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden || !prefs().scanOnFocus || !scanner.hasSource()) return;
+    if (Date.now() - Math.max(scanner.state.lastScanAt, lastFocusScan) < 60000) return;
+    lastFocusScan = Date.now();
+    try {
+      const r = await scanner.scan();
+      if (r.blocked) { views.setReconnectNeeded(true); views.render(); return; }
+      if (r.added || r.removed || r.updated) {
+        await views.loadFromDB();
+        views.render();
+        const parts = [`新增 ${r.added} 首`];
+        if (r.updated) parts.push(`更新 ${r.updated} 首`);
+        if (r.removed) parts.push(`移除 ${r.removed} 首`);
+        toast(parts.join('，'));
+      }
+    } catch (e) {
+      console.warn('回前台自动扫描失败', e);
+    }
+  });
+}
+
+// ---------- Auto-DJ：队列播完自动接歌 ----------
+// 同歌手/同专辑优先，其余随机补足；实际选择逻辑放这里，player 只留钩子
+function bindRadioProvider() {
+  player.setRadioProvider((curRel) => {
+    const cur = views.trackByRel(curRel);
+    const inQueue = new Set(player.getQueue());
+    const pool = views.allTracks().filter(t => !inQueue.has(t.rel));
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const score = (t) => (cur && (t.artist === cur.artist || t.albumKey === cur.albumKey) ? 0 : 1);
+    return pool.sort((a, b) => score(a) - score(b)).slice(0, 10).map(t => t.rel);
   });
 }
 

@@ -1,6 +1,6 @@
 // 视图渲染：歌曲 / 专辑 / 歌手 / 播放列表 / 设置 + 详情页
 import * as db from './db.js';
-import { prefs, setPref } from './prefs.js';
+import { prefs, setPref, DEFAULTS } from './prefs.js';
 import { icon, esc, fmtTime, toast, showMenu, closeMenu, confirmDialog, promptDialog, debounce, gradFor, collator, paintRange } from './ui.js';
 import * as scanner from './scanner.js';
 import * as player from './player.js';
@@ -19,6 +19,7 @@ let deferredPrompt = null;
 let reconnectNeeded = false;
 
 export const trackByRel = (rel) => byRel.get(rel);
+export const allTracks = () => tracks;
 
 export async function loadFromDB() {
   tracks = await db.getAllTracks();
@@ -39,8 +40,12 @@ const artIO = new IntersectionObserver((entries) => {
     loadArtInto(e.target);
   }
 }, { rootMargin: '260px' });
+// 正被观察的占位节点：IO 对 target 持强引用，节点从 DOM 移除后必须显式
+// unobserve，否则每次重渲染泄漏一批游离节点
+const observedPh = new Set();
 
 async function loadArtInto(node) {
+  observedPh.delete(node);
   const { key, rel, ext, size } = node.dataset;
   const r = await art.getArt(key, rel, ext);
   if (!r) return; // 无封面，保留渐变占位
@@ -55,7 +60,7 @@ async function loadArtInto(node) {
 
 // 兜底：IO 在部分环境（后台标签）不触发，直接按几何位置扫描可见占位
 function loadVisibleArt() {
-  for (const n of document.querySelectorAll('.ph[data-key]')) {
+  for (const n of [...observedPh]) {
     const r = n.getBoundingClientRect();
     if (r.width && r.top < innerHeight + 260 && r.bottom > -260) {
       artIO.unobserve(n);
@@ -74,6 +79,7 @@ function phNode(key, rel, ext, cls, iconName = 'note', size) {
   if (size) d.dataset.size = size;
   d.innerHTML = icon(iconName);
   artIO.observe(d);
+  observedPh.add(d);
   return d;
 }
 
@@ -88,11 +94,13 @@ function matchSearch(t, q) {
 // IME 组合期间（打拼音未选字）绝不能触发过滤/重渲染：重渲染会替换输入框或抢焦点，
 // 直接掐断输入法，表现为「只能打出拼音字母、中文打不出来」。
 // 组合结束后（compositionend）再统一读取最终文本执行一次过滤。
+// 非组合输入防抖 140ms：全量过滤+排序+重建视图很重，逐键执行会卡顿。
 function bindSearch(input, onQuery) {
   let composing = false;
+  const debounced = debounce(onQuery, 140);
   input.addEventListener('compositionstart', () => { composing = true; });
   input.addEventListener('compositionend', () => { composing = false; onQuery(input.value); });
-  input.addEventListener('input', () => { if (!composing) onQuery(input.value); });
+  input.addEventListener('input', () => { if (!composing) debounced(input.value); });
 }
 // 重渲染后把焦点与光标还给搜索框（只在搜索态下需要）。
 // 延迟到本轮同步渲染结束后执行：渲染函数用 frag 组装、可能尚未挂载 DOM，
@@ -150,7 +158,9 @@ const TABS = [
   ['songs', '歌曲', 'music'],
   ['albums', '专辑', 'disc'],
   ['artists', '歌手', 'mic'],
+  ['folders', '文件夹', 'folder'],
   ['playlists', '播放列表', 'playlist'],
+  ['stats', '统计', 'chart'],
   ['settings', '设置', 'settings'],
 ];
 
@@ -217,12 +227,17 @@ function renderContent() {
   // 销毁上一视图的分块观察器
   for (const h of chunkHandles) h.destroy();
   chunkHandles = [];
+  // 释放上一视图仍被 IO 观察的占位节点（IO 对其持强引用，不清会泄漏）
+  for (const n of observedPh) artIO.unobserve(n);
+  observedPh.clear();
   contentEl = rootEl;
   contentEl.innerHTML = '';
   if (nav.detail) {
     if (nav.detail.type === 'album') return renderAlbumDetail();
     if (nav.detail.type === 'artist') return renderArtistDetail();
     if (nav.detail.type === 'playlist') return renderPlaylistDetail();
+    if (nav.detail.type === 'folder') return renderFolderDetail();
+    if (nav.detail.type === 'smart') return renderSmartDetail();
   }
   // 刻意保持同步：早期版本把这里改成 async，结果 24 个调用点全部拿到未完成的 Promise ——
   // 同步部分照跑、switch 被推到微任务，表现为「页面空白且无报错」，
@@ -231,18 +246,22 @@ function renderContent() {
     case 'songs': return renderSongs();
     case 'albums': return renderAlbums();
     case 'artists': return renderArtists();
+    case 'folders': return renderFolders();
     case 'playlists': return renderPlaylists();
+    case 'stats': return renderStats();
     case 'settings': return renderSettings();
   }
 }
 
 function reconnectBanner() {
   const d = document.createElement('div');
+  const n = scanner.pendingRootCount();
   d.className = 'banner';
-  d.innerHTML = `${icon('folder')}<div class="t"><b>需要重新连接音乐文件夹</b>浏览器需要你重新授权后才能访问音乐。</div><button class="btn small">重新连接</button>`;
+  d.innerHTML = `${icon('folder')}<div class="t"><b>需要重新连接音乐文件夹</b>浏览器需要你重新授权后才能访问音乐${n > 1 ? `（共 ${n} 个文件夹待授权）` : ''}。</div><button class="btn small">重新连接</button>`;
   d.querySelector('button').addEventListener('click', async () => {
     const ok = await scanner.authorizeSavedHandle();
     if (ok) { reconnectNeeded = false; await rescanAndRefresh(true); }
+    else if (scanner.pendingRootCount()) toast('已授权一个文件夹，请继续授权剩余的');
     else toast('未获得授权');
   });
   return d;
@@ -552,7 +571,8 @@ function emptyList(msg) {
   return d;
 }
 
-async function renderAlbumDetail() {
+// 注意保持同步：无 await 却标 async 会返回被丢弃的 Promise（见 renderContent 注释）
+function renderAlbumDetail() {
   const d = nav.detail;
   const albums = albumsOf(tracks);
   const a = albums.find(x => x.key === d.key);
@@ -656,6 +676,236 @@ function renderArtistDetail() {
   bindListEvents(listEl);
 }
 
+
+// ---------- 文件夹视图 ----------
+const dirOfRel = (rel) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
+/** 目录路径的显示名：顶层可能是附加根的 key，映射成文件夹名 */
+function folderDisplayName(path) {
+  if (!path) return '音乐文件夹';
+  if (!path.includes('/')) {
+    const r = scanner.state.roots.find(x => x.key === path);
+    if (r) return r.name;
+  }
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+/** 某目录下的直接曲目与子目录（子目录计数含其全部后代曲目） */
+function folderEntries(path) {
+  const dirs = new Map();
+  const items = [];
+  for (const t of tracks) {
+    const d = dirOfRel(t.rel);
+    if (d === path) { items.push(t); continue; }
+    if (path ? !d.startsWith(path + '/') : !d) continue;
+    const rest = path ? d.slice(path.length + 1) : d;
+    const child = path ? `${path}/${rest.split('/')[0]}` : rest.split('/')[0];
+    dirs.set(child, (dirs.get(child) || 0) + 1);
+  }
+  return { dirs: [...dirs.entries()], items };
+}
+
+function folderRow(childPath, count) {
+  const name = folderDisplayName(childPath);
+  const row = document.createElement('div');
+  row.className = 'arow';
+  row.innerHTML = `<div class="avatar" style="background:${gradFor(childPath || '?')}">${icon('folder')}</div>
+    <div style="flex:1;min-width:0"><div class="name">${esc(name)}</div><div class="sub">${count} 首</div></div>${icon('back')}`;
+  row.addEventListener('click', () => { nav.detail = { type: 'folder', path: childPath, title: name }; render(); });
+  return row;
+}
+
+function detailHead({ kind, title, icon: ic, grad, meta }) {
+  const head = document.createElement('div');
+  head.className = 'detail-head';
+  head.innerHTML = `<div class="ph" style="background:${grad}">${icon(ic)}</div>
+    <div class="info"><div class="kind">${esc(kind)}</div><h2>${esc(title)}</h2><div class="meta">${meta}</div></div>`;
+  contentEl.appendChild(head);
+  return head;
+}
+
+function detailActions(rels) {
+  const has = rels.length > 0;
+  const actions = document.createElement('div');
+  actions.className = 'detail-actions';
+  actions.innerHTML = `<button class="btn" id="aPlay" ${has ? '' : 'disabled style="opacity:.5"'}>${icon('play')}播放</button>
+    <button class="btn ghost" id="aShuffle" ${has ? '' : 'disabled style="opacity:.5"'}>${icon('shuffle')}随机播放</button>`;
+  contentEl.appendChild(actions);
+  actions.querySelector('#aPlay').addEventListener('click', () => player.playRels(rels, rels[0]));
+  actions.querySelector('#aShuffle').addEventListener('click', () => player.playShuffled(rels));
+}
+
+function renderFolders() {
+  const frag = document.createDocumentFragment();
+  const head = document.createElement('div');
+  head.className = 'view-head';
+  head.innerHTML = `<h2>文件夹</h2>`;
+  frag.appendChild(head);
+  if (!scanner.hasSource()) { frag.appendChild(emptySource()); contentEl.appendChild(frag); return; }
+
+  const { dirs, items } = folderEntries('');
+  listContext = items.map(t => t.rel);
+  if (!dirs.length && !items.length) { frag.appendChild(emptyList('没有找到音乐文件')); contentEl.appendChild(frag); return; }
+
+  if (dirs.length) {
+    const dirList = document.createElement('div');
+    dirList.className = 'track-list';
+    dirs.sort((a, b) => collator.compare(folderDisplayName(a[0]), folderDisplayName(b[0])));
+    for (const [child, count] of dirs) dirList.appendChild(folderRow(child, count));
+    frag.appendChild(dirList);
+  }
+  contentEl.appendChild(frag);
+  if (items.length) {
+    const listEl = document.createElement('div');
+    listEl.className = 'track-list';
+    contentEl.appendChild(listEl);
+    const chunk = makeChunkList(listEl, renderTrackRow);
+    chunk.reset(sortTracks(items));
+    bindListEvents(listEl);
+  }
+}
+
+function renderFolderDetail() {
+  const d = nav.detail;
+  contentEl.innerHTML = '';
+  const { dirs, items } = folderEntries(d.path);
+  const relsUnder = tracks
+    .filter(t => { const dd = dirOfRel(t.rel); return dd === d.path || dd.startsWith(d.path + '/'); })
+    .sort((a, b) => collator.compare(a.rel, b.rel))
+    .map(t => t.rel);
+  listContext = items.map(t => t.rel);
+
+  const meta = `${relsUnder.length} 首${dirs.length ? ` · ${dirs.length} 个子文件夹` : ''}`;
+  detailHead({ kind: '文件夹', title: folderDisplayName(d.path), icon: 'folder', grad: gradFor(d.path || '?'), meta });
+  detailActions(relsUnder);
+
+  if (dirs.length) {
+    const dirList = document.createElement('div');
+    dirList.className = 'track-list';
+    dirs.sort((a, b) => collator.compare(folderDisplayName(a[0]), folderDisplayName(b[0])));
+    for (const [child, count] of dirs) dirList.appendChild(folderRow(child, count));
+    contentEl.appendChild(dirList);
+  }
+  if (!dirs.length && !items.length) { contentEl.appendChild(emptyList('文件夹为空')); return; }
+  if (items.length) {
+    const listEl = document.createElement('div');
+    listEl.className = 'track-list';
+    contentEl.appendChild(listEl);
+    const chunk = makeChunkList(listEl, renderTrackRow);
+    chunk.reset(sortTracks(items));
+    bindListEvents(listEl);
+  }
+}
+
+// ---------- 统计页 ----------
+const LISTEN_ACH = [
+  { h: 1, name: '初听' },
+  { h: 10, name: '常客' },
+  { h: 50, name: '发烧友' },
+  { h: 100, name: '百小时乐迷' },
+  { h: 500, name: '骨灰级' },
+  { h: 1000, name: '千时传说' },
+];
+function fmtHours(ms) {
+  const m = Math.round(ms / 60000);
+  const h = Math.floor(m / 60);
+  return h >= 1 ? `${h} 小时 ${m % 60} 分钟` : `${m} 分钟`;
+}
+
+function renderStats() {
+  contentEl.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'settings';
+  const totalDur = tracks.reduce((a, t) => a + (t.duration || 0), 0);
+  const artists = new Set(tracks.map(t => t.artist)).size;
+  const albums = new Set(tracks.map(t => t.albumKey)).size;
+  const listened = player.getListenMs();
+  const hourMs = 3600000;
+  const nextAch = LISTEN_ACH.find(a => listened < a.h * hourMs);
+  const pct = nextAch ? Math.min(100, Math.round((listened / (nextAch.h * hourMs)) * 100)) : 100;
+  const top = tracks.filter(t => (t.playCount || 0) > 0).sort((a, b) => b.playCount - a.playCount).slice(0, 10);
+
+  wrap.innerHTML = `
+    <h2>听歌成就</h2>
+    <div class="card" style="padding:20px">
+      <div style="display:flex;align-items:center;gap:14px">
+        <span class="icon-btn" style="cursor:default;color:var(--accent)">${icon('trophy')}</span>
+        <div class="lab">
+          <b>累计听歌 ${esc(fmtHours(listened))}</b>
+          <span>${nextAch ? `距「${esc(nextAch.name)}」（${nextAch.h} 小时）还差 ${esc(fmtHours(nextAch.h * hourMs - listened))}` : '已解锁全部成就，无可阻挡'}</span>
+        </div>
+      </div>
+      <div class="ach-bar"><i style="width:${pct}%"></i></div>
+      <div class="ach-row">
+        ${LISTEN_ACH.map(a => `<span class="ach ${listened >= a.h * hourMs ? 'on' : ''}">${esc(a.name)} · ${a.h}h</span>`).join('')}
+      </div>
+    </div>
+
+    <h2>媒体库</h2>
+    <div class="card set-group">
+      <div class="set-row"><div class="lab"><b>${tracks.length} 首歌曲</b><span>${albums} 张专辑 · ${artists} 位歌手 · 总时长 ${fmtTime(totalDur)}</span></div></div>
+    </div>
+
+    <h2>智能列表</h2>
+    <div class="plcards">
+      ${[
+        { key: 'top', name: '最常播放', grad: 'linear-gradient(135deg,#f5576c,#ff8fab)', ic: 'chart' },
+        { key: 'new', name: '最近添加', grad: 'linear-gradient(135deg,#43e97b,#38f9d7)', ic: 'plus' },
+        { key: 'recent', name: '最近播放', grad: 'linear-gradient(135deg,#4facfe,#00f2fe)', ic: 'clock' },
+      ].map(c => `
+        <div class="plcard" data-smart="${c.key}">
+          <div class="cover" style="background:${c.grad}">${icon(c.ic)}</div>
+          <div style="flex:1;min-width:0"><div class="name">${esc(c.name)}</div><div class="sub">查看全部</div></div>
+        </div>`).join('')}
+    </div>
+
+    <h2>最常播放 Top 10</h2>
+    <div class="card set-group" id="statsTop">
+      ${top.length ? '' : '<div class="set-row"><div class="lab"><span>还没有播放记录，去听几首歌吧。</span></div></div>'}
+    </div>
+  `;
+  contentEl.appendChild(wrap);
+
+  wrap.querySelectorAll('[data-smart]').forEach(card => {
+    card.addEventListener('click', () => {
+      const key = card.dataset.smart;
+      const titles = { top: '最常播放', new: '最近添加', recent: '最近播放' };
+      nav.detail = { type: 'smart', key, title: titles[key] };
+      render();
+    });
+  });
+
+  // Top 10 曲目行
+  const topBox = wrap.querySelector('#statsTop');
+  if (top.length) {
+    const listEl = document.createElement('div');
+    listEl.className = 'track-list';
+    listEl.style.margin = '6px 0';
+    topBox.appendChild(listEl);
+    listContext = top.map(t => t.rel);
+    const chunk = makeChunkList(listEl, renderTrackRow, 10);
+    chunk.reset(top);
+    bindListEvents(listEl);
+  }
+}
+
+function renderSmartDetail() {
+  const d = nav.detail;
+  contentEl.innerHTML = '';
+  let list;
+  if (d.key === 'top') list = tracks.filter(t => (t.playCount || 0) > 0).sort((a, b) => b.playCount - a.playCount);
+  else if (d.key === 'new') list = [...tracks].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).slice(0, 200);
+  else list = tracks.filter(t => t.lastPlayed).sort((a, b) => b.lastPlayed - a.lastPlayed).slice(0, 200);
+  const rels = list.map(t => t.rel);
+  listContext = rels;
+  detailHead({ kind: '智能列表', title: d.title, icon: 'chart', grad: gradFor(d.key), meta: `${rels.length} 首` });
+  detailActions(rels);
+  if (!rels.length) { contentEl.appendChild(emptyList('列表为空')); return; }
+  const listEl = document.createElement('div');
+  listEl.className = 'track-list';
+  contentEl.appendChild(listEl);
+  const chunk = makeChunkList(listEl, renderTrackRow);
+  chunk.reset(list);
+  bindListEvents(listEl);
+}
 
 // ---------- 播放列表页 ----------
 function renderPlaylists() {
@@ -768,6 +1018,14 @@ function eqPresetOf(gains) {
 function renderSettings() {
   contentEl.innerHTML = '';
   const p = prefs();
+  const supportsFSA = 'showDirectoryPicker' in window;
+  // 多文件夹列表（主文件夹不可移除，只能更换）
+  const rootsRows = scanner.state.roots.map(r => `
+      <div class="set-row">
+        <span class="icon-btn" style="cursor:default">${icon('folder')}</span>
+        <div class="lab"><b>${esc(r.name)}</b><span>${r.key === 'musicDir' ? '主文件夹' : '附加文件夹'}</span></div>
+        ${r.key !== 'musicDir' ? `<button class="icon-btn small root-rm" data-k="${esc(r.key)}" aria-label="移除该文件夹" title="移除">${icon('trash')}</button>` : ''}
+      </div>`).join('');
   const wrap = document.createElement('div');
   wrap.className = 'settings';
   const themeIcon = { light: 'sun', dark: 'moon', glass: 'drop' }[p.theme];
@@ -795,7 +1053,9 @@ function renderSettings() {
           <button class="btn ghost small" id="btnRescan" ${scanner.hasSource() ? '' : 'disabled style="opacity:.5"'}>${icon('refresh')}重新扫描</button>
         </div>
       </div>
-      ${'showDirectoryPicker' in window ? '' : `<div class="set-row"><div class="lab"><span>当前浏览器不支持文件夹句柄记忆（建议 Chrome / Edge），将使用文件选择方式，刷新后需重新选择。</span></div></div>`}
+      ${rootsRows}
+      ${supportsFSA && scanner.hasSource() ? `<div class="set-row"><div class="lab"><b>附加音乐文件夹</b><span>把更多文件夹合并进同一媒体库</span></div><button class="btn small" id="btnAddRoot">${icon('plus')}添加</button></div>` : ''}
+      ${supportsFSA ? '' : `<div class="set-row"><div class="lab"><span>当前浏览器不支持文件夹句柄记忆（建议 Chrome / Edge），将使用文件选择方式，刷新后需重新选择。</span></div></div>`}
     </div>
 
     <h2>播放</h2>
@@ -821,6 +1081,8 @@ function renderSettings() {
       <div class="set-row"><div class="lab"><b>存储占用</b><span id="storageInfo">计算中…</span></div></div>
       <div class="set-row" id="rowInstall" hidden><div class="lab"><b>安装应用</b><span>像原生应用一样从桌面 / 主屏启动</span></div><button class="btn small" id="btnInstall">${icon('download')}安装</button></div>
       <div class="set-row"><div class="lab"><b>检查更新</b><span>应用缓存版本 ${APP_VERSION}</span></div><button class="btn ghost small" id="btnUpdate">${icon('refresh')}检查</button></div>
+      <div class="set-row"><div class="lab"><b>导出备份</b><span>播放列表、喜欢与播放统计保存为 JSON 文件</span></div><button class="btn ghost small" id="btnExport">${icon('download')}导出</button></div>
+      <div class="set-row"><div class="lab"><b>恢复备份</b><span>从备份 JSON 合并恢复（不删除现有数据）</span></div><button class="btn ghost small" id="btnImport">${icon('upload')}导入</button></div>
       <div class="set-row"><div class="lab"><b>清除播放统计</b><span>重置播放次数与最近播放</span></div><button class="btn ghost small" id="btnClearStats">清除</button></div>
       <div class="set-row"><div class="lab"><b>清空媒体库</b><span>删除所有索引与封面缓存（源文件不受影响）</span></div><button class="btn ghost-danger small" id="btnWipe">清空</button></div>
     </div>
@@ -860,6 +1122,24 @@ function renderSettings() {
   // 文件夹
   wrap.querySelector('#btnPick').addEventListener('click', pickFolder);
   wrap.querySelector('#btnRescan').addEventListener('click', () => rescanAndRefresh(true));
+  wrap.querySelector('#btnAddRoot')?.addEventListener('click', async () => {
+    try {
+      const h = await showDirectoryPicker({ mode: 'read', id: 'music-extra' });
+      await scanner.addFsaRoot(h);
+      await rescanAndRefresh(true);
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      console.warn('添加文件夹失败', e);
+      toast('添加文件夹失败');
+    }
+  });
+  wrap.querySelectorAll('.root-rm').forEach(b => b.addEventListener('click', async () => {
+    const key = b.dataset.k;
+    const r = scanner.state.roots.find(x => x.key === key);
+    if (!(await confirmDialog('移除文件夹', `将从媒体库移除「${r ? r.name : '该文件夹'}」中的所有歌曲（源文件不受影响）。`, '移除', true))) return;
+    await scanner.removeRoot(key);
+    await rescanAndRefresh(true);
+  }));
   // 开关
   wrap.querySelector('#swLyrics').addEventListener('change', (e) => setPref('lyricsOn', e.target.checked));
   wrap.querySelector('#swViz').addEventListener('change', (e) => setPref('visualizerOn', e.target.checked));
@@ -876,6 +1156,69 @@ function renderSettings() {
       const sel = wrap.querySelector('#eqPreset');
       sel.value = eqPresetOf(prefs().eqGains);
     });
+  });
+  // 备份导出/导入
+  wrap.querySelector('#btnExport').addEventListener('click', async () => {
+    const data = {
+      app: 'local-music-pwa',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      prefs: prefs(),
+      playlists: await db.getPlaylists(),
+      listenMs: player.getListenMs(),
+      tracks: tracks.map(t => ({
+        rel: t.rel, liked: !!t.liked, likedAt: t.likedAt || undefined,
+        playCount: t.playCount || 0, lastPlayed: t.lastPlayed || undefined, addedAt: t.addedAt || undefined,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `music-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast('备份已导出');
+  });
+  wrap.querySelector('#btnImport').addEventListener('click', () => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.json,application/json';
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      let data;
+      try { data = JSON.parse(await f.text()); } catch { toast('文件不是有效的 JSON'); return; }
+      const pls = Array.isArray(data.playlists) ? data.playlists : [];
+      const bts = Array.isArray(data.tracks) ? data.tracks : [];
+      if (data.app !== 'local-music-pwa') { toast('不是本应用导出的备份文件'); return; }
+      if (!(await confirmDialog('导入备份', `包含 ${pls.length} 个播放列表与 ${bts.length} 首歌的喜欢/播放记录。将合并进当前媒体库（同名条目取更完整的值）。`, '导入'))) return;
+      for (const pl of pls) {
+        if (pl && pl.id && Array.isArray(pl.rels)) {
+          await db.putPlaylist({ id: String(pl.id), name: String(pl.name || '未命名'), rels: pl.rels.map(String), created: pl.created || Date.now() });
+        }
+      }
+      let applied = 0;
+      for (const b of bts) {
+        const t = byRel.get(b.rel);
+        if (!t) continue;
+        if (b.liked) { t.liked = true; if (b.likedAt && !t.likedAt) t.likedAt = b.likedAt; }
+        t.playCount = Math.max(t.playCount || 0, b.playCount || 0);
+        const lp = Math.max(t.lastPlayed || 0, b.lastPlayed || 0);
+        t.lastPlayed = lp || undefined;
+        if (b.addedAt && (t.addedAt == null || b.addedAt < t.addedAt)) t.addedAt = b.addedAt;
+        applied++;
+      }
+      if (applied) await db.bulkPutTracks([...byRel.values()]);
+      if (typeof data.listenMs === 'number') player.mergeListenMs(data.listenMs);
+      if (data.prefs && typeof data.prefs === 'object') {
+        for (const k of Object.keys(DEFAULTS)) if (k in data.prefs) setPref(k, data.prefs[k]);
+        import('./prefs.js').then(m => m.applyTheme(prefs().theme));
+      }
+      await loadFromDB();
+      renderContent();
+      toast(`已导入：${pls.length} 个播放列表、${applied} 首歌的记录`);
+    });
+    inp.click();
   });
   // 数据
   wrap.querySelector('#btnUpdate').addEventListener('click', async () => {
@@ -958,10 +1301,17 @@ function fallbackPick() {
 
 export async function rescanAndRefresh(showToast = true) {
   const r = await scanner.scan();
+  if (r.blocked) {
+    reconnectNeeded = true;
+    render();
+    if (showToast) toast('音乐文件夹需要重新授权');
+    return r;
+  }
   await loadFromDB();
   render();
   if (showToast) {
     const parts = [`新增 ${r.added} 首`];
+    if (r.updated) parts.push(`更新 ${r.updated} 首`);
     if (r.removed) parts.push(`移除 ${r.removed} 首`);
     if (r.failed) parts.push(`${r.failed} 个文件读取失败`);
     toast(parts.join('，') || '媒体库已是最新');

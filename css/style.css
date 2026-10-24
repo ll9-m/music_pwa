@@ -853,3 +853,10 @@ input[type="range"].seek { height: 4px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001s !important; transition-duration: .001s !important; }
 }
+
+/* ---------- 统计页：听歌成就卡 ---------- */
+.ach-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-top: 14px; }
+.ach-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.ach-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ach { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12.5px; color: var(--text3); background: var(--card); white-space: nowrap; }
+.ach.on { color: #fff; background: var(--accent); border-color: transparent; font-weight: 600; }

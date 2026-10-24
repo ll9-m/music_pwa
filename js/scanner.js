@@ -18,13 +18,15 @@ const SKIP_DIRS = new Set(['system volume information', '$recycle.bin', 'recycle
 
 export const state = {
   mode: null,        // 'fsa' | 'files'
-  root: null,        // FileSystemDirectoryHandle (fsa)
+  roots: [],         // [{key, handle, name}] 多文件夹；key 'musicDir' 为主文件夹，其余为 'root:<uuid>' 附加文件夹
   files: new Map(),  // rel -> File (files 模式)
   name: '',
   scanning: false,
+  lastScanAt: 0,     // 上次完成扫描的时间戳（回前台自动扫描的节流用）
   lrcMap: new Map(),     // audioRel -> lyricRel
   lyricFiles: new Map(), // 歌名/文件名 key -> [{rel,dir,ext}] 全局歌词索引
   lyricTitles: new Map(),// 仅歌名 key（忽略歌手前缀）-> [{rel,dir,ext}]
+  savedHandles: [],  // 待重新授权的根句柄
 };
 
 const dirCache = new Map();
@@ -43,18 +45,44 @@ const baseOf = (name) => {
 export const isAudio = (name) => AUDIO_EXTS.has(extOf(name));
 export const albumKeyOf = (t) => `${(t.albumArtist || t.artist || '').toLowerCase().trim()}::${(t.album || '').toLowerCase().trim()}`;
 
+function updateName() {
+  state.name = state.roots.map(r => r.name).join('、');
+}
+
 // ---------- 来源设置 ----------
+/** 设置/替换主文件夹（rel 无前缀，保持与老库兼容） */
 export async function setFsaRoot(handle, { persist = true } = {}) {
   state.mode = 'fsa';
-  state.root = handle;
-  state.name = handle.name || '已选择的文件夹';
   dirCache.clear();
+  const rec = { key: 'musicDir', handle, name: handle.name || '已选择的文件夹' };
+  const i = state.roots.findIndex(r => r.key === 'musicDir');
+  if (i >= 0) state.roots[i] = rec; else state.roots.unshift(rec);
+  updateName();
   if (persist) await db.putHandle('musicDir', handle);
+}
+
+/** 追加附加文件夹：rel 以 key（root:<uuid>）为路径前缀，与真实路径永不冲突 */
+export async function addFsaRoot(handle) {
+  state.mode = 'fsa';
+  const key = 'root:' + crypto.randomUUID();
+  state.roots.push({ key, handle, name: handle.name || '附加文件夹' });
+  dirCache.clear();
+  updateName();
+  await db.putHandle(key, handle);
+  return key;
+}
+
+/** 移除一个根（调用方负责触发重扫以清理其曲目） */
+export async function removeRoot(key) {
+  state.roots = state.roots.filter(r => r.key !== key);
+  dirCache.clear();
+  updateName();
+  await db.deleteHandle(key);
 }
 
 export function setFiles(fileList) {
   state.mode = 'files';
-  state.root = null;
+  state.roots = [];
   state.files = new Map();
   state.name = '（本次会话的文件夹）';
   for (const f of fileList) {
@@ -152,8 +180,17 @@ async function* walkFsa(dir, prefix = '', depth = 0) {
 
 export async function scan() {
   if (state.scanning) return { added: 0, updated: 0, removed: 0, failed: 0 };
-  if (state.mode === 'fsa' && !state.root) return { added: 0, updated: 0, removed: 0, failed: 0 };
-  if (state.mode === 'files' && state.files.size === 0 && !state.root) return { added: 0, updated: 0, removed: 0, failed: 0 };
+  if (state.mode === 'fsa' && !state.roots.length) return { added: 0, updated: 0, removed: 0, failed: 0 };
+  if (state.mode === 'files' && state.files.size === 0 && !state.roots.length) return { added: 0, updated: 0, removed: 0, failed: 0 };
+  // FSA 下要求所有根都已授权：部分授权时扫描会导致未授权根的曲目被当成「已删除」
+  if (state.mode === 'fsa') {
+    for (const r of state.roots) {
+      if (r.handle.queryPermission) {
+        const p = await r.handle.queryPermission({ mode: 'read' });
+        if (p !== 'granted') return { blocked: true, added: 0, updated: 0, removed: 0, failed: 0 };
+      }
+    }
+  }
   state.scanning = true;
   report('collect', 0, 0);
   try {
@@ -163,8 +200,11 @@ export async function scan() {
     state.lyricFiles = new Map();
     state.lyricTitles = new Map();
     if (state.mode === 'fsa') {
-      for await (const rel of walkFsa(state.root)) {
-        found.set(rel, {});
+      for (const r of state.roots) {
+        const prefix = r.key === 'musicDir' ? '' : r.key;
+        for await (const rel of walkFsa(r.handle, prefix)) {
+          found.set(rel, {});
+        }
       }
     } else {
       for (const rel of state.files.keys()) {
@@ -178,19 +218,19 @@ export async function scan() {
       state.lrcMap.set(rel, matchLyricFor(rel));
     }
 
-    // 2. 与数据库对比
+    // 2. 与数据库对比（新文件直接解析；已有文件先 stat 出 sig，变了才重新解析）
     const existing = await db.getAllTracks();
     const existingMap = new Map(existing.map(t => [t.rel, t]));
     const toParse = [];
     const removed = [];
     for (const rel of found.keys()) {
-      if (!existingMap.has(rel)) toParse.push({ rel, isNew: true });
+      toParse.push({ rel, isNew: !existingMap.has(rel) });
     }
     for (const t of existing) {
       if (!found.has(t.rel)) removed.push(t.rel);
     }
 
-    let done = 0, failed = 0;
+    let done = 0, failed = 0, added = 0, updated = 0;
     const changed = [];
     const CONCURRENCY = 4;
     let cursor = 0;
@@ -202,8 +242,10 @@ export async function scan() {
         try {
           const file = await getFile(item.rel);
           if (!file) { failed++; continue; }
-          const meta = await parseMeta(file, extOf(item.rel));
+          const sig = `${file.size}|${file.lastModified || 0}`;
           const old = existingMap.get(item.rel);
+          if (!item.isNew && old && old.sig === sig) { done++; continue; } // 未变更，跳过
+          const meta = await parseMeta(file, extOf(item.rel));
           const name = item.rel.split('/').pop();
           const base = name.replace(/\.[^.]+$/, '');
           // 无标签时按 "歌手 - 标题" 或文件名
@@ -215,7 +257,7 @@ export async function scan() {
           if (!title) title = base;
           const track = {
             rel: item.rel,
-            sig: `${file.size}|${file.lastModified || 0}`,
+            sig,
             name,
             title,
             artist: artist || '未知歌手',
@@ -235,6 +277,7 @@ export async function scan() {
           };
           track.albumKey = albumKeyOf(track);
           changed.push(track);
+          if (item.isNew) added++; else updated++;
         } catch (e) {
           console.warn('解析失败', item.rel, e);
           failed++;
@@ -260,7 +303,8 @@ export async function scan() {
     } catch { /* 非关键 */ }
 
     report('done', 1, 1);
-    return { added: toParse.length, updated: 0, removed: removed.length, failed };
+    state.lastScanAt = Date.now();
+    return { added, updated, removed: removed.length, failed };
   } finally {
     state.scanning = false;
   }
@@ -269,18 +313,29 @@ export async function scan() {
 // ---------- 文件访问 ----------
 export async function getFile(rel) {
   if (state.mode === 'files') return state.files.get(rel) || null;
-  if (state.mode === 'fsa' && state.root) {
-    const parts = rel.split('/');
+  if (state.mode === 'fsa' && state.roots.length) {
+    // 附加文件夹的 rel 带 key 前缀（root:<uuid>/path），先定位所属根
+    let root = state.roots[0];
+    let path = rel;
+    for (const r of state.roots) {
+      if (r.key === 'musicDir') continue;
+      const p = r.key + '/';
+      if (rel.startsWith(p)) { root = r; path = rel.slice(p.length); break; }
+    }
+    const parts = path.split('/');
     const fileName = parts.pop();
-    let dir = state.root;
+    let dir = root.handle;
+    // 缓存键沿用完整 rel 前缀，跨根永不冲突
+    let prefix = root.key === 'musicDir' ? '' : root.key;
     for (const p of parts) {
-      const key = (dir === state.root ? '' : dirCache.get(dir) || '') + '/' + p;
+      const key = prefix ? `${prefix}/${p}` : p;
       let h = dirCache.get(key);
       if (!h) {
         h = await dir.getDirectoryHandle(p);
         dirCache.set(key, h);
       }
       dir = h;
+      prefix = key;
     }
     const fh = await dir.getFileHandle(fileName);
     return fh.getFile();
@@ -317,34 +372,49 @@ export async function getLrcText(rel) {
 // ---------- 启动恢复 ----------
 export async function restoreSavedRoot() {
   try {
-    const rec = await db.getHandle('musicDir');
-    if (rec && rec.handle && typeof rec.handle.queryPermission === 'function') {
-      const perm = await rec.handle.queryPermission({ mode: 'read' });
+    const recs = await db.getAllHandles();
+    let granted = 0;
+    const pending = [];
+    for (const rec of recs) {
+      const h = rec && rec.handle;
+      if (!h || typeof h.queryPermission !== 'function') continue;
+      const perm = await h.queryPermission({ mode: 'read' });
       if (perm === 'granted') {
-        await setFsaRoot(rec.handle, { persist: false });
-        return 'granted';
+        const name = h.name || (rec.key === 'musicDir' ? '音乐文件夹' : '附加文件夹');
+        if (rec.key === 'musicDir') state.roots.unshift({ key: rec.key, handle: h, name });
+        else state.roots.push({ key: rec.key, handle: h, name });
+        granted++;
+      } else {
+        pending.push({ key: rec.key, handle: h });
       }
-      state.savedHandle = rec.handle;
-      return perm; // 'prompt' | 'denied'
     }
+    if (state.roots.length) { state.mode = 'fsa'; dirCache.clear(); updateName(); }
+    state.savedHandles = pending;
+    if (pending.length) return 'prompt';
+    return granted ? 'granted' : null;
   } catch (e) {
     console.warn('恢复文件夹句柄失败', e);
   }
   return null;
 }
 
+/** 逐个请求待授权句柄（每次调用只处理一个，浏览器要求每次都在用户手势内） */
 export async function authorizeSavedHandle() {
-  const h = state.savedHandle;
-  if (!h) return false;
-  const perm = await h.requestPermission({ mode: 'read' });
-  if (perm === 'granted') {
-    await setFsaRoot(h, { persist: false });
-    state.savedHandle = null;
-    return true;
-  }
-  return false;
+  const pending = state.savedHandles || [];
+  if (!pending.length) return false;
+  const rec = pending[0];
+  const perm = await rec.handle.requestPermission({ mode: 'read' });
+  if (perm !== 'granted') return false;
+  state.roots.push({ key: rec.key, handle: rec.handle, name: rec.handle.name || '附加文件夹' });
+  state.savedHandles = pending.slice(1);
+  state.mode = 'fsa';
+  dirCache.clear();
+  updateName();
+  return state.savedHandles.length === 0; // true = 全部授权完成
 }
 
+export const pendingRootCount = () => (state.savedHandles || []).length;
+
 export function hasSource() {
-  return (state.mode === 'fsa' && state.root) || (state.mode === 'files' && state.files.size > 0);
+  return (state.mode === 'fsa' && state.roots.length > 0) || (state.mode === 'files' && state.files.size > 0);
 }
